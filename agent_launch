@@ -16,7 +16,7 @@ if [[ ! -t 0 ]]; then
   exit 1
 fi
 
-printf '  1  cursor\n  2  copilot\n  3  codex\n> ' >&2
+printf '  1  Cursor (xAI)\n  2  Copilot (GitHub)\n  3  Codex (OpenAI)\n> ' >&2
 IFS= read -rsn1 key || exit 1
 printf '\n' >&2
 
