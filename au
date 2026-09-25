@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path.home()
+
+
+def http_json(url, headers, method="GET", body=None):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return json.load(response)
+
+
+def local_dt(value):
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        number = float(value)
+        if number > 10_000_000_000:
+            number /= 1000
+        moment = datetime.fromtimestamp(number, timezone.utc)
+    else:
+        text = str(value)
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            moment = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+        else:
+            moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone()
+
+
+def span(reset_at):
+    seconds = int((reset_at - datetime.now().astimezone()).total_seconds())
+    if seconds <= 0:
+        return "now"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        unit = "day" if days == 1 else "days"
+        return f"{days} {unit}"
+    if hours:
+        unit = "hour" if hours == 1 else "hours"
+        return f"{hours} {unit}"
+    unit = "min" if minutes == 1 else "min"
+    return f"{max(minutes, 1)} {unit}"
+
+
+def row(label, percent, reset_at):
+    when = local_dt(reset_at)
+    date = f"{when.day}.{when.month}.{when.year % 100:02d}"
+    print(f"{label:<10} {round(float(percent)):>3}% | {span(when)} | {date}")
+
+
+def fail(label, message):
+    print(f"{label:<10} {message}", file=__import__("sys").stderr)
+
+
+def cursor_rows():
+    auth = json.loads((HOME / ".config/cursor/auth.json").read_text())
+    data = http_json(
+        "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        {
+            "Authorization": f"Bearer {auth['accessToken']}",
+            "Content-Type": "application/json",
+            "Connect-Protocol-Version": "1",
+        },
+        method="POST",
+        body={},
+    )
+    plan = data.get("planUsage") or {}
+    percent = plan.get("totalPercentUsed")
+    if percent is None:
+        percent = plan.get("autoPercentUsed", plan.get("apiPercentUsed"))
+    reset = data.get("billingCycleEnd")
+    if percent is None or reset is None:
+        raise RuntimeError("usage response has no period total")
+    row("cursor", percent, reset)
+
+
+def copilot_token():
+    try:
+        out = subprocess.run(
+            ["secret-tool", "search", "--all", "service", "copilot-cli"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        out = ""
+    secret = None
+    for line in out.splitlines():
+        if line.startswith("secret = "):
+            secret = line.split("=", 1)[1].strip()
+    if secret:
+        return secret
+    for path in (HOME / ".local/share/keyrings").glob("*.keyring"):
+        text = path.read_text(errors="replace")
+        blocks = text.split("item-type=")
+        for block in blocks:
+            if "value=copilot-cli" not in block:
+                continue
+            for line in block.splitlines():
+                if line.startswith("secret="):
+                    return line.split("=", 1)[1].strip()
+    raise RuntimeError("copilot login not found")
+
+
+def copilot_rows():
+    token = copilot_token()
+    data = http_json(
+        "https://api.github.com/copilot_internal/user",
+        {
+            "Authorization": f"token {token}",
+            "Accept": "application/json",
+            "Editor-Version": "vscode/1.99.0",
+            "Editor-Plugin-Version": "copilot/1.0.0",
+            "User-Agent": "GitHubCopilot/1.0",
+        },
+    )
+    snap = (data.get("quota_snapshots") or {}).get("premium_interactions") or {}
+    remaining = snap.get("percent_remaining")
+    reset = data.get("quota_reset_date")
+    if remaining is None or not reset:
+        raise RuntimeError("usage response has no premium quota")
+    row("copilot", 100 - float(remaining), reset)
+
+
+def codex_rows():
+    auth = json.loads((HOME / ".codex/auth.json").read_text())
+    tokens = auth["tokens"]
+    data = http_json(
+        "https://chatgpt.com/backend-api/wham/usage",
+        {
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "ChatGPT-Account-ID": tokens["account_id"],
+            "Accept": "application/json",
+        },
+    )
+    windows = data.get("rate_limit") or {}
+    shown = False
+    for label, key in (("codex 5h", "primary_window"), ("codex 7d", "secondary_window")):
+        window = windows.get(key) or {}
+        percent = window.get("used_percent")
+        reset = window.get("reset_at")
+        if percent is None or reset is None:
+            continue
+        row(label, percent, reset)
+        shown = True
+    if not shown:
+        raise RuntimeError("usage response has no rate limit windows")
+
+
+def main():
+    for label, fetch in (
+        ("cursor", cursor_rows),
+        ("copilot", copilot_rows),
+        ("codex", codex_rows),
+    ):
+        try:
+            fetch()
+        except urllib.error.HTTPError as error:
+            fail(label, f"http {error.code}")
+        except Exception as error:
+            fail(label, str(error))
+
+
+if __name__ == "__main__":
+    main()

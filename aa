@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+launch() {
+  case "$1" in
+    cursor) exec agent --trust ;;
+    copilot) exec copilot --allow-all ;;
+    codex) exec codex --approve-for-me ;;
+    *)
+      echo "aa: unknown agent: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if [[ $# -gt 0 ]]; then
+  launch "$1"
+fi
+
+if [[ ! -t 0 ]]; then
+  echo "aa: need a terminal" >&2
+  exit 1
+fi
+
+printf '  1  cursor\n  2  copilot\n  3  codex\n> ' >&2
+IFS= read -rsn1 key || exit 1
+printf '\n' >&2
+
+case "$key" in
+  1) launch cursor ;;
+  2) launch copilot ;;
+  3) launch codex ;;
+esac
