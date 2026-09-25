@@ -7,8 +7,6 @@ Two console commands for Cursor, GitHub Copilot, and Codex.
 | `agent_launch` | `aa` | Pick 1 cursor, 2 copilot, or 3 codex, then launch it |
 | `agent_usage` | `au` | Usage rows: `34% \| 5 days \| 1.11.26` |
 
-`aa cursor` (or `copilot`, `codex`) skips the menu.
-
 Install:
 
 ```bash

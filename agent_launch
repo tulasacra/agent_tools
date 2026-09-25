@@ -8,16 +8,8 @@ launch() {
     cursor) exec agent --trust ;;
     copilot) exec copilot --allow-all ;;
     codex) exec codex --approve-for-me ;;
-    *)
-      echo "$name: unknown agent: $1" >&2
-      exit 1
-      ;;
   esac
 }
-
-if [[ $# -gt 0 ]]; then
-  launch "$1"
-fi
 
 if [[ ! -t 0 ]]; then
   echo "$name: need a terminal" >&2
