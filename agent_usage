@@ -139,14 +139,15 @@ def cursor_rows():
         body={},
     )
     plan = data.get("planUsage") or {}
-    percent = plan.get("totalPercentUsed")
-    if percent is None:
-        percent = plan.get("autoPercentUsed", plan.get("apiPercentUsed"))
+    inhouse = plan.get("autoPercentUsed")
+    api = plan.get("apiPercentUsed")
     reset = data.get("billingCycleEnd")
     start = data.get("billingCycleStart")
-    if percent is None or reset is None or start is None:
+    if inhouse is None or api is None or reset is None or start is None:
         raise RuntimeError("usage response has no period total")
-    row("Cursor", percent, reset, epoch_seconds(reset) - epoch_seconds(start))
+    window = epoch_seconds(reset) - epoch_seconds(start)
+    row("Cursor(inhouse)", inhouse, reset, window)
+    row("Cursor(api)", api, reset, window)
 
 
 def copilot_token():
