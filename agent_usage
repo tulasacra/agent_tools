@@ -33,31 +33,83 @@ def local_dt(value):
     return moment.astimezone()
 
 
-def span(reset_at):
-    seconds = int((reset_at - datetime.now().astimezone()).total_seconds())
+entries = []
+
+
+def remaining(reset_at):
+    seconds = (reset_at - datetime.now().astimezone()).total_seconds()
     if seconds <= 0:
-        return "now"
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    if days:
-        unit = "day" if days == 1 else "days"
-        return f"{days} {unit}"
-    if hours:
+        return "now", ""
+    if seconds >= 86400:
+        text = f"{seconds / 86400:.1f}"
+        unit = "day" if text == "1.0" else "days"
+        return text, unit
+    if seconds >= 3600:
+        hours = int(seconds // 3600)
         unit = "hour" if hours == 1 else "hours"
-        return f"{hours} {unit}"
-    unit = "min" if minutes == 1 else "min"
-    return f"{max(minutes, 1)} {unit}"
+        return str(hours), unit
+    minutes = max(int(seconds // 60), 1)
+    return str(minutes), "min"
 
 
 def row(label, percent, reset_at):
     when = local_dt(reset_at)
-    date = f"{when.day}.{when.month}.{when.year % 100:02d}"
-    print(f"{label:<10} {round(float(percent)):>3}% | {span(when)} | {date}")
+    number, unit = remaining(when)
+    date = f"{when.day:02d}.{when.month:02d}.{when.year % 100:02d}"
+    entries.append((label, f"{float(percent):.1f}%", number, unit, date))
 
 
 def fail(label, message):
-    print(f"{label:<10} {message}", file=__import__("sys").stderr)
+    entries.append((label, message))
+
+
+def print_table():
+    agent_w = len("Agent")
+    used_w = len("Used")
+    num_w = 0
+    unit_w = 0
+    date_w = len("Reset date")
+    for entry in entries:
+        agent_w = max(agent_w, len(entry[0]))
+        if len(entry) == 2:
+            continue
+        used_w = max(used_w, len(entry[1]))
+        num_w = max(num_w, len(entry[2]))
+        unit_w = max(unit_w, len(entry[3]))
+        date_w = max(date_w, len(entry[4]))
+
+    left_w = num_w + (1 + unit_w if unit_w else 0)
+    left_w = max(left_w, len("Resets in"))
+
+    def left_cell(number, unit):
+        text = f"{number:>{num_w}}" if num_w else ""
+        if unit_w:
+            text += " " + f"{unit:<{unit_w}}"
+        return f"{text:<{left_w}}"
+
+    print(
+        f"{'Agent':<{agent_w}}  "
+        f"{'Used':>{used_w}}  "
+        f"{'Resets in':<{left_w}}  "
+        f"{'Reset date':<{date_w}}".rstrip()
+    )
+    print(
+        f"{'-' * agent_w}  "
+        f"{'-' * used_w}  "
+        f"{'-' * left_w}  "
+        f"{'-' * date_w}"
+    )
+    for entry in entries:
+        if len(entry) == 2:
+            print(f"{entry[0]:<{agent_w}}  {entry[1]}")
+            continue
+        label, used, number, unit, date = entry
+        print(
+            f"{label:<{agent_w}}  "
+            f"{used:>{used_w}}  "
+            f"{left_cell(number, unit)}  "
+            f"{date:<{date_w}}".rstrip()
+        )
 
 
 def cursor_rows():
@@ -79,7 +131,7 @@ def cursor_rows():
     reset = data.get("billingCycleEnd")
     if percent is None or reset is None:
         raise RuntimeError("usage response has no period total")
-    row("cursor", percent, reset)
+    row("Cursor", percent, reset)
 
 
 def copilot_token():
@@ -127,7 +179,7 @@ def copilot_rows():
     reset = data.get("quota_reset_date")
     if remaining is None or not reset:
         raise RuntimeError("usage response has no premium quota")
-    row("copilot", 100 - float(remaining), reset)
+    row("Copilot", 100 - float(remaining), reset)
 
 
 def codex_rows():
@@ -159,21 +211,21 @@ def codex_rows():
 def codex_label(window):
     seconds = window.get("limit_window_seconds")
     if not isinstance(seconds, (int, float)) or seconds <= 0:
-        return "codex"
+        return "Codex"
     hours = int(seconds) // 3600
     if hours >= 24 and hours % 24 == 0:
         days = hours // 24
-        return f"codex {days}d"
+        return f"Codex {days}d"
     if hours:
-        return f"codex {hours}h"
-    return "codex"
+        return f"Codex {hours}h"
+    return "Codex"
 
 
 def main():
     for label, fetch in (
-        ("cursor", cursor_rows),
-        ("copilot", copilot_rows),
-        ("codex", codex_rows),
+        ("Cursor", cursor_rows),
+        ("Copilot", copilot_rows),
+        ("Codex", codex_rows),
     ):
         try:
             fetch()
@@ -181,6 +233,7 @@ def main():
             fail(label, f"http {error.code}")
         except Exception as error:
             fail(label, str(error))
+    print_table()
 
 
 if __name__ == "__main__":
