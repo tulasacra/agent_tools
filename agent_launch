@@ -5,9 +5,9 @@ name=$(basename "$0")
 
 launch() {
   case "$1" in
-    cursor) exec agent --trust ;;
-    copilot) exec copilot --allow-all ;;
-    codex) exec codex --approve-for-me ;;
+    cursor) exec agent ;;
+    copilot) exec copilot ;;
+    codex) exec codex ;;
   esac
 }
 
