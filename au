@@ -143,16 +143,30 @@ def codex_rows():
     )
     windows = data.get("rate_limit") or {}
     shown = False
-    for label, key in (("codex 5h", "primary_window"), ("codex 7d", "secondary_window")):
-        window = windows.get(key) or {}
+    for window in windows.values():
+        if not isinstance(window, dict):
+            continue
         percent = window.get("used_percent")
         reset = window.get("reset_at")
         if percent is None or reset is None:
             continue
-        row(label, percent, reset)
+        row(codex_label(window), percent, reset)
         shown = True
     if not shown:
         raise RuntimeError("usage response has no rate limit windows")
+
+
+def codex_label(window):
+    seconds = window.get("limit_window_seconds")
+    if not isinstance(seconds, (int, float)) or seconds <= 0:
+        return "codex"
+    hours = int(seconds) // 3600
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"codex {days}d"
+    if hours:
+        return f"codex {hours}h"
+    return "codex"
 
 
 def main():
