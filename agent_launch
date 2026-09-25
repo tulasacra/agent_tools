@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+name=$(basename "$0")
+
 launch() {
   case "$1" in
     cursor) exec agent --trust ;;
     copilot) exec copilot --allow-all ;;
     codex) exec codex --approve-for-me ;;
     *)
-      echo "aa: unknown agent: $1" >&2
+      echo "$name: unknown agent: $1" >&2
       exit 1
       ;;
   esac
@@ -18,7 +20,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 if [[ ! -t 0 ]]; then
-  echo "aa: need a terminal" >&2
+  echo "$name: need a terminal" >&2
   exit 1
 fi
 
