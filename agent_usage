@@ -36,27 +36,30 @@ def local_dt(value):
 entries = []
 
 
-def remaining(reset_at):
+def epoch_seconds(value):
+    number = float(value)
+    if number > 10_000_000_000:
+        number /= 1000
+    return number
+
+
+def remaining(reset_at, window_seconds):
     seconds = (reset_at - datetime.now().astimezone()).total_seconds()
+    days = window_seconds / 86400
+    if abs(days - round(days)) < 0.01:
+        period = str(int(round(days)))
+    else:
+        period = f"{days:.1f}"
     if seconds <= 0:
-        return "now", ""
-    if seconds >= 86400:
-        text = f"{seconds / 86400:.1f}"
-        unit = "day" if text == "1.0" else "days"
-        return text, unit
-    if seconds >= 3600:
-        hours = int(seconds // 3600)
-        unit = "hour" if hours == 1 else "hours"
-        return str(hours), unit
-    minutes = max(int(seconds // 60), 1)
-    return str(minutes), "min"
+        return "now", "", ""
+    return f"{seconds / 86400:.1f}", period, "days"
 
 
-def row(label, percent, reset_at):
+def row(label, percent, reset_at, window_seconds):
     when = local_dt(reset_at)
-    number, unit = remaining(when)
+    left, period, unit = remaining(when, window_seconds)
     date = f"{when.day:02d}.{when.month:02d}.{when.year % 100:02d}"
-    entries.append((label, f"{float(percent):.1f}%", number, unit, date))
+    entries.append((label, f"{float(percent):.1f}%", left, period, unit, date))
 
 
 def fail(label, message):
@@ -67,6 +70,7 @@ def print_table():
     agent_w = len("Agent")
     used_w = len("Used")
     num_w = 0
+    period_w = 0
     unit_w = 0
     date_w = len("Reset date")
     for entry in entries:
@@ -75,14 +79,24 @@ def print_table():
             continue
         used_w = max(used_w, len(entry[1]))
         num_w = max(num_w, len(entry[2]))
-        unit_w = max(unit_w, len(entry[3]))
-        date_w = max(date_w, len(entry[4]))
+        period_w = max(period_w, len(entry[3]))
+        unit_w = max(unit_w, len(entry[4]))
+        date_w = max(date_w, len(entry[5]))
 
-    left_w = num_w + (1 + unit_w if unit_w else 0)
+    left_w = num_w
+    if period_w:
+        left_w += 1 + period_w
+    if unit_w:
+        left_w += 1 + unit_w
     left_w = max(left_w, len("Resets in"))
 
-    def left_cell(number, unit):
+    def left_cell(number, period, unit):
         text = f"{number:>{num_w}}" if num_w else ""
+        if period_w:
+            if period:
+                text += "/" + f"{period:>{period_w}}"
+            else:
+                text += " " * (1 + period_w)
         if unit_w:
             text += " " + f"{unit:<{unit_w}}"
         return f"{text:<{left_w}}"
@@ -103,11 +117,11 @@ def print_table():
         if len(entry) == 2:
             print(f"{entry[0]:<{agent_w}}  {entry[1]}")
             continue
-        label, used, number, unit, date = entry
+        label, used, number, period, unit, date = entry
         print(
             f"{label:<{agent_w}}  "
             f"{used:>{used_w}}  "
-            f"{left_cell(number, unit)}  "
+            f"{left_cell(number, period, unit)}  "
             f"{date:<{date_w}}".rstrip()
         )
 
@@ -129,9 +143,10 @@ def cursor_rows():
     if percent is None:
         percent = plan.get("autoPercentUsed", plan.get("apiPercentUsed"))
     reset = data.get("billingCycleEnd")
-    if percent is None or reset is None:
+    start = data.get("billingCycleStart")
+    if percent is None or reset is None or start is None:
         raise RuntimeError("usage response has no period total")
-    row("Cursor", percent, reset)
+    row("Cursor", percent, reset, epoch_seconds(reset) - epoch_seconds(start))
 
 
 def copilot_token():
@@ -179,7 +194,7 @@ def copilot_rows():
     reset = data.get("quota_reset_date")
     if remaining is None or not reset:
         raise RuntimeError("usage response has no premium quota")
-    row("Copilot", 100 - float(remaining), reset)
+    row("Copilot", 100 - float(remaining), reset, 30 * 86400)
 
 
 def codex_rows():
@@ -200,25 +215,13 @@ def codex_rows():
             continue
         percent = window.get("used_percent")
         reset = window.get("reset_at")
-        if percent is None or reset is None:
+        window_seconds = window.get("limit_window_seconds")
+        if percent is None or reset is None or not window_seconds:
             continue
-        row(codex_label(window), percent, reset)
+        row("Codex", percent, reset, window_seconds)
         shown = True
     if not shown:
         raise RuntimeError("usage response has no rate limit windows")
-
-
-def codex_label(window):
-    seconds = window.get("limit_window_seconds")
-    if not isinstance(seconds, (int, float)) or seconds <= 0:
-        return "Codex"
-    hours = int(seconds) // 3600
-    if hours >= 24 and hours % 24 == 0:
-        days = hours // 24
-        return f"Codex {days}d"
-    if hours:
-        return f"Codex {hours}h"
-    return "Codex"
 
 
 def main():
