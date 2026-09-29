@@ -146,8 +146,8 @@ def cursor_rows():
     if inhouse is None or api is None or reset is None or start is None:
         raise RuntimeError("usage response has no period total")
     window = epoch_seconds(reset) - epoch_seconds(start)
-    row("Cursor(inhouse)", inhouse, reset, window)
-    row("Cursor(api)", api, reset, window)
+    row("Cursor (Grok)", inhouse, reset, window)
+    row("Cursor (*)", api, reset, window)
 
 
 def copilot_token():
@@ -195,7 +195,7 @@ def copilot_rows():
     reset = data.get("quota_reset_date")
     if remaining is None or not reset:
         raise RuntimeError("usage response has no premium quota")
-    row("Copilot", 100 - float(remaining), reset, 30 * 86400)
+    row("Copilot (*)", 100 - float(remaining), reset, 30 * 86400)
 
 
 def codex_rows():
@@ -219,7 +219,7 @@ def codex_rows():
         window_seconds = window.get("limit_window_seconds")
         if percent is None or reset is None or not window_seconds:
             continue
-        row("Codex", percent, reset, window_seconds)
+        row("Codex (Gpt)", percent, reset, window_seconds)
         shown = True
     if not shown:
         raise RuntimeError("usage response has no rate limit windows")
