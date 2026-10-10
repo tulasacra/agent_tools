@@ -225,11 +225,44 @@ def codex_rows():
         raise RuntimeError("usage response has no rate limit windows")
 
 
+def antigravity_rows():
+    try:
+        out = subprocess.run(
+            ["agy", "--print", "/usage"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        out = ""
+    shown = False
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        if "Limit Remaining" not in parts[1]:
+            continue
+        try:
+            percent_str = "".join(c for c in parts[2] if c.isdigit() or c == ".")
+            percent = 100.0 - float(percent_str)
+        except ValueError:
+            continue
+        model = "Gemini" if "Gemini" in parts[0] else "*"
+        period = "Week" if "Weekly" in parts[1] else "5h"
+        window = 7 * 86400 if "Weekly" in parts[1] else 5 * 3600
+        date_str = parts[3].strip()
+        row(f"Antigravity ({model} {period})", percent, date_str, window)
+        shown = True
+    if not shown:
+        raise RuntimeError("usage response has no limits")
+
+
 def main():
     for label, fetch in (
         ("Cursor", cursor_rows),
         ("Copilot", copilot_rows),
         ("Codex", codex_rows),
+        ("Antigravity", antigravity_rows),
     ):
         try:
             fetch()
