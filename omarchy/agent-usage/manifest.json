@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "local.agent-usage",
+  "name": "Agent Usage",
+  "version": "1.0.0",
+  "description": "All au quotas and reset times in one popup.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "Agent Usage",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

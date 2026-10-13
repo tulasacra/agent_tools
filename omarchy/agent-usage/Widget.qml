@@ -1,0 +1,299 @@
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import QtQuick.Controls as Controls
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+
+Panel {
+    id: root
+    moduleName: "local.agent-usage"
+    // The shell routes summon/hide/toggle to this widget on each screen.
+    manageIpc: false
+
+    readonly property color foreground: Color.popups.text
+    readonly property color muted: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.65)
+    readonly property color paceOrange: "#f97316"
+    readonly property color paceYellow: "#eab308"
+    readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+    property bool busy: false
+    property var rows: []
+    property string updatedAt: ""
+    property string refreshError: ""
+    property double nowMs: Date.now()
+
+    implicitWidth: button.implicitWidth
+    implicitHeight: button.implicitHeight
+
+    function refresh() {
+        if (busy) return;
+        refreshError = "";
+        busy = true;
+        usageProcess.running = true;
+    }
+
+    onOpenedChanged: if (opened) {
+        nowMs = Date.now();
+        refresh();
+        Qt.callLater(function() { keyCatcher.forceActiveFocus(); });
+    }
+
+    Process {
+        id: usageProcess
+        // Also bound the whole process tree, including a hung CLI child.
+        command: ["/usr/bin/timeout", "--kill-after=5", "65",
+                  Quickshell.env("HOME") + "/.local/bin/au", "--json"]
+        // stdout is only committed once both the process and its pipes finish.
+        stdout: StdioCollector {
+            id: output
+            waitForEnd: true
+        }
+        stderr: StdioCollector { waitForEnd: true }
+        onExited: function(exitCode, exitStatus) {
+            root.busy = false;
+            if (exitCode !== 0 || exitStatus !== 0) {
+                root.refreshError = exitCode === 124 || exitCode === 137
+                    ? "Quota refresh timed out. Press Refresh to retry."
+                    : "au failed (exit " + exitCode + "). Check ~/.local/bin/au, then press Refresh.";
+                return;
+            }
+            try {
+                var snapshot = Model.parseSnapshot(output.text);
+                root.rows = snapshot.rows;
+                root.updatedAt = snapshot.generated_at;
+                root.nowMs = Date.now();
+            } catch (e) {
+                root.refreshError = e.message;
+            }
+        }
+        // Process has no error signal; failed starts only change running.
+        // Defer so a normal exit can finish handling its output first.
+        onRunningChanged: if (!running) Qt.callLater(function() {
+            if (root.busy && !usageProcess.running) {
+                root.busy = false;
+                root.refreshError = "Could not start the quota command. Press Refresh to retry.";
+            }
+        })
+    }
+
+    Timer {
+        interval: 1000
+        running: root.opened
+        repeat: true
+        onTriggered: root.nowMs = Date.now()
+    }
+
+    WidgetButton {
+        id: button
+        anchors.fill: parent
+        bar: root.bar
+        text: "AU"
+        tooltipText: "Agent usage"
+        onPressed: function(mouseButton) {
+            if (mouseButton === Qt.LeftButton) root.toggle();
+        }
+    }
+
+    component Cell: Text {
+        textFormat: Text.PlainText
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+    }
+
+    KeyboardPanel {
+        id: popup
+        anchorItem: button
+        owner: root
+        bar: root.bar
+        open: root.opened
+        focusTarget: keyCatcher
+        contentWidth: popup.fittedContentWidth(Style.space(700))
+        contentHeight: popup.fittedContentHeight(content.implicitHeight, Style.space(640))
+
+        PanelKeyCatcher {
+            id: keyCatcher
+            anchors.fill: parent
+            onCloseRequested: root.close()
+            onActivateRequested: root.refresh()
+            onTextKey: function(text) {
+                if (text.toLowerCase() === "r") root.refresh();
+            }
+            onTabRequested: function(direction) { root.switchPanel(direction); }
+            onMoveRequested: function(dx, dy) {
+                scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height,
+                                                      scroll.contentY + dy * Style.space(48)));
+            }
+
+            Flickable {
+                id: scroll
+                anchors.fill: parent
+                contentWidth: width
+                contentHeight: content.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                flickableDirection: Flickable.VerticalFlick
+                interactive: contentHeight > height
+                Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
+
+                Column {
+                    id: content
+                    width: scroll.width
+                    spacing: Style.space(14)
+                    readonly property real columnSpace: Style.space(12)
+                    readonly property real tableWidth: width - columnSpace * 4
+                    readonly property real nameWidth: tableWidth * 0.36
+                    readonly property real usedWidth: tableWidth * 0.12
+                    readonly property real countdownWidth: tableWidth * 0.17
+                    readonly property real dateWidth: Math.min(tableWidth * 0.25, Math.ceil(dateMetrics.advanceWidth))
+                    readonly property real windowWidth: tableWidth * 0.10
+
+                    TextMetrics {
+                        id: dateMetrics
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        text: "00.00.00 00:00"
+                    }
+
+                    Item {
+                        width: parent.width
+                        implicitHeight: Math.max(title.implicitHeight, refreshButton.implicitHeight)
+
+                        Cell {
+                            id: title
+                            anchors.left: parent.left
+                            anchors.right: refreshButton.left
+                            anchors.rightMargin: Style.space(12)
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Agent usage"
+                            font.pixelSize: Style.font.heading
+                            font.bold: true
+                        }
+                        Button {
+                            id: refreshButton
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: root.busy ? "Refreshing…" : "Refresh"
+                            enabled: !root.busy
+                            bordered: true
+                            foreground: root.foreground
+                            fontFamily: root.fontFamily
+                            fontSize: Style.font.bodySmall
+                            onClicked: root.refresh()
+                        }
+                    }
+
+                    Cell {
+                        width: parent.width
+                        color: root.muted
+                        font.pixelSize: Style.font.bodySmall
+                        text: root.updatedAt
+                            ? (root.refreshError ? "Previous snapshot · " : "Updated ")
+                              + Qt.formatDateTime(new Date(root.updatedAt), "dd.MM.yy HH:mm:ss")
+                              + (root.busy ? " · refreshing" : "")
+                            : root.busy ? "Fetching quotas…" : "No snapshot yet"
+                    }
+
+                    Cell {
+                        visible: root.refreshError !== ""
+                        width: parent.width
+                        text: root.refreshError
+                        color: Color.urgent
+                        wrapMode: Text.Wrap
+                        elide: Text.ElideNone
+                    }
+
+                    Row {
+                        visible: root.rows.length > 0
+                        spacing: content.columnSpace
+                        Cell { width: content.nameWidth; text: "Agent"; color: root.muted }
+                        Cell { width: content.usedWidth; text: "Used"; color: root.muted; horizontalAlignment: Text.AlignRight }
+                        Cell { width: content.countdownWidth; text: "Resets in"; color: root.muted }
+                        Cell { width: content.dateWidth; text: "Reset date"; color: root.muted }
+                        Cell { width: content.windowWidth; text: "Window"; color: root.muted }
+                    }
+
+                    Repeater {
+                        model: root.rows
+                        delegate: Column {
+                            id: quota
+                            required property var modelData
+                            required property int index
+                            readonly property bool failed: modelData.error !== null
+                            readonly property var pace: Model.usagePace(modelData, root.updatedAt, root.nowMs)
+                            width: content.width
+                            spacing: Style.space(4)
+
+                            Row {
+                                spacing: content.columnSpace
+                                Cell {
+                                    width: content.nameWidth
+                                    text: quota.modelData.label
+                                }
+                                Cell {
+                                    width: content.usedWidth
+                                    text: quota.failed ? "—" : quota.modelData.used_percent.toFixed(1) + "%"
+                                    horizontalAlignment: Text.AlignRight
+                                    color: quota.pace.level === "red" ? Color.urgent
+                                        : quota.pace.level === "orange" ? root.paceOrange
+                                        : quota.pace.level === "yellow" ? root.paceYellow : root.foreground
+
+                                    MouseArea {
+                                        id: paceHover
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        acceptedButtons: Qt.NoButton
+                                    }
+                                    PanelToolTip {
+                                        visible: !quota.failed && paceHover.containsMouse
+                                        text: quota.pace.hint
+                                        fontFamily: root.fontFamily
+                                    }
+                                }
+                                Cell {
+                                    width: content.countdownWidth
+                                    text: quota.failed ? "—" : Model.countdown(quota.modelData.reset_at, root.nowMs)
+                                }
+                                Cell {
+                                    width: content.dateWidth
+                                    text: quota.failed ? "—" : Qt.formatDateTime(new Date(quota.modelData.reset_at), "dd.MM.yy HH:mm")
+                                }
+                                Cell {
+                                    width: content.windowWidth
+                                    text: quota.failed ? "—" : Model.duration(quota.modelData.window_seconds)
+                                }
+                            }
+                            Cell {
+                                visible: quota.failed
+                                width: parent.width
+                                text: quota.failed ? "Unavailable · " + quota.modelData.error : ""
+                                color: Color.urgent
+                                font.pixelSize: Style.font.bodySmall
+                                wrapMode: Text.Wrap
+                                elide: Text.ElideNone
+                            }
+                            PanelSeparator {
+                                visible: quota.index < root.rows.length - 1
+                                    && quota.modelData.provider !== root.rows[quota.index + 1].provider
+                                width: parent.width
+                                foreground: root.foreground
+                            }
+                        }
+                    }
+
+                    Cell {
+                        width: parent.width
+                        text: "Refresh: R or Enter   ·   Close: Esc   ·   Times are local"
+                        color: root.muted
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.Wrap
+                    }
+                }
+            }
+        }
+    }
+}
