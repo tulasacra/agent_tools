@@ -37,7 +37,8 @@ Panel {
 
     onOpenedChanged: if (opened) {
         nowMs = Date.now();
-        refresh();
+        var snapshotAge = nowMs - Date.parse(updatedAt);
+        if (!updatedAt || snapshotAge < 0 || snapshotAge >= 60000) refresh();
         Qt.callLater(function() { keyCatcher.forceActiveFocus(); });
     }
 
@@ -112,7 +113,7 @@ Panel {
         bar: root.bar
         open: root.opened
         focusTarget: keyCatcher
-        contentWidth: popup.fittedContentWidth(Style.space(700))
+        contentWidth: popup.fittedContentWidth(Style.space(640))
         contentHeight: popup.fittedContentHeight(content.implicitHeight, Style.space(640))
 
         PanelKeyCatcher {
@@ -145,12 +146,12 @@ Panel {
                     width: scroll.width
                     spacing: Style.space(14)
                     readonly property real columnSpace: Style.space(12)
-                    readonly property real tableWidth: width - columnSpace * 4
-                    readonly property real nameWidth: tableWidth * 0.36
-                    readonly property real usedWidth: tableWidth * 0.12
-                    readonly property real countdownWidth: tableWidth * 0.17
-                    readonly property real dateWidth: Math.min(tableWidth * 0.25, Math.ceil(dateMetrics.advanceWidth))
-                    readonly property real windowWidth: tableWidth * 0.10
+                    readonly property real tableWidth: Math.max(0, width - columnSpace * 4 - dateWidth - windowWidth)
+                    readonly property real nameWidth: tableWidth * 0.55
+                    readonly property real usedWidth: tableWidth * 0.18
+                    readonly property real countdownWidth: tableWidth * 0.27
+                    readonly property real dateWidth: Math.ceil(dateMetrics.advanceWidth)
+                    readonly property real windowWidth: Math.ceil(windowMetrics.advanceWidth)
 
                     TextMetrics {
                         id: dateMetrics
@@ -159,24 +160,45 @@ Panel {
                         text: "00.00.00 00:00"
                     }
 
+                    TextMetrics {
+                        id: windowMetrics
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        text: "Window"
+                    }
+
                     Item {
                         width: parent.width
-                        implicitHeight: Math.max(title.implicitHeight, refreshButton.implicitHeight)
+                        implicitHeight: Math.max(title.implicitHeight, updatedLabel.implicitHeight,
+                                                 refreshButton.implicitHeight)
 
                         Cell {
                             id: title
                             anchors.left: parent.left
-                            anchors.right: refreshButton.left
+                            anchors.right: updatedLabel.left
                             anchors.rightMargin: Style.space(12)
                             anchors.verticalCenter: parent.verticalCenter
                             text: "Agent usage"
                             font.pixelSize: Style.font.heading
                             font.bold: true
                         }
+                        Cell {
+                            id: updatedLabel
+                            anchors.right: refreshButton.left
+                            anchors.rightMargin: Style.space(12)
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: root.muted
+                            font.pixelSize: Style.font.bodySmall
+                            text: root.updatedAt
+                                ? (root.refreshError ? "Previous snapshot · " : "Updated ")
+                                  + Qt.formatDateTime(new Date(root.updatedAt), "dd.MM.yy HH:mm:ss")
+                                : root.busy ? "Fetching quotas…" : "No snapshot yet"
+                        }
                         Button {
                             id: refreshButton
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
+                            implicitWidth: Style.space(120)
                             text: root.busy ? "Refreshing…" : "Refresh"
                             enabled: !root.busy
                             bordered: true
@@ -185,17 +207,6 @@ Panel {
                             fontSize: Style.font.bodySmall
                             onClicked: root.refresh()
                         }
-                    }
-
-                    Cell {
-                        width: parent.width
-                        color: root.muted
-                        font.pixelSize: Style.font.bodySmall
-                        text: root.updatedAt
-                            ? (root.refreshError ? "Previous snapshot · " : "Updated ")
-                              + Qt.formatDateTime(new Date(root.updatedAt), "dd.MM.yy HH:mm:ss")
-                              + (root.busy ? " · refreshing" : "")
-                            : root.busy ? "Fetching quotas…" : "No snapshot yet"
                     }
 
                     Cell {

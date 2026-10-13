@@ -24,9 +24,10 @@ HTTP requests and subprocess calls have 30-second timeouts.
 
 ## Omarchy popup
 
-The **AU** bar button opens all quotas together. Opening the popup or clicking
-**Refresh** fetches fresh data; **R** and **Enter** also refresh, and **Esc**
-closes it. There is no periodic fetching. The latest snapshot stays in memory
+The **AU** bar button opens all quotas together. Opening the popup fetches fresh
+data unless the latest snapshot is less than one minute old. Clicking **Refresh**
+or pressing **R** or **Enter** always refreshes; **Esc** closes the popup.
+There is no periodic fetching. The latest snapshot stays in memory
 between openings, reset countdowns update while visible, and dates use the
 desktop's local timezone. An in-progress fetch can finish after closing.
 Only one fetch runs per widget instance, with a 65-second overall timeout

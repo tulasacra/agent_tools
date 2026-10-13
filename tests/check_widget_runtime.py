@@ -13,6 +13,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1] / "omarchy/agent-usage/Widget.qml"
 FIXTURE = '''import json, sys, time
+from datetime import datetime, timezone
 time.sleep(0.3)
 mode = sys.argv[1]
 if mode == "invalid":
@@ -26,7 +27,7 @@ else:
         row.update(used_percent=None, reset_at=None, window_seconds=None, error="http 401")
     elif mode == "unknown-window":
         row["window_seconds"] = None
-    print(json.dumps({"generated_at": "2030-10-13T00:00:00+00:00", "rows": [row]}))
+    print(json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(), "rows": [row]}))
 '''
 
 HARNESS = '''import QtQuick
@@ -65,6 +66,9 @@ ShellRoot {
                 : [PYTHON, FIXTURE_PATH, value];
         }
         function action(value: string): void { harness.widget[value](); }
+        function snapshotAge(milliseconds: string): void {
+            harness.widget.updatedAt = new Date(Date.now() - Number(milliseconds)).toISOString();
+        }
     }
 }
 '''
@@ -112,6 +116,20 @@ def main():
                 assert json.loads(ipc("status"))["starts"] == 1
                 print("PASS: on-open refresh, single in-flight command, result retained after closing, no closed polling")
 
+                for age in (0, 59000):
+                    ipc("snapshotAge", str(age))
+                    ipc("action", "open")
+                    state = wait_for(lambda state: state["opened"])
+                    assert not state["busy"] and state["starts"] == 1
+                    assert state["rows"] == good["rows"]
+                    ipc("action", "close")
+                print("PASS: reopening within one minute reuses the snapshot")
+
+                ipc("action", "refresh")
+                good = wait_for(lambda state: not state["busy"] and state["starts"] == 2)
+                assert good["rows"][0]["used_percent"] == 12.5 and not good["error"]
+                print("PASS: manual refresh bypasses the one-minute cache")
+
                 for mode, expected in (("invalid", "invalid JSON"), ("exit", "exit 7"),
                                        ("missing", "Could not start"), ("deadline", "timed out")):
                     ipc("mode", mode)
@@ -137,14 +155,17 @@ def main():
                 print("PASS: unknown window preserves quota data without rejecting the snapshot")
 
                 ipc("mode", "success")
+                ipc("snapshotAge", "60000")
+                previous_starts = state["starts"]
                 ipc("action", "open")
-                state = wait_for(lambda state: not state["busy"])
+                state = wait_for(lambda state: not state["busy"] and state["starts"] == previous_starts + 1)
                 assert state["rows"][0]["used_percent"] == 12.5 and not state["error"]
+                assert state["rows"][0]["window_seconds"] == 18000
                 assert state["opened"]
                 time.sleep(1.1)
                 assert json.loads(ipc("status"))["starts"] == state["starts"]
                 ipc("action", "close")
-                print("PASS: reopening refreshes and recovers, with no periodic fetching while open")
+                print("PASS: reopening after one minute refreshes, with no periodic fetching while open")
             except BaseException:
                 log.seek(0)
                 print(log.read(), file=sys.stderr)
