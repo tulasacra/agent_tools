@@ -59,7 +59,7 @@ class UsageTests(unittest.TestCase):
             },
         }
         auth = json.dumps({"accessToken": "PRIVATE", "tokens": {"access_token": "PRIVATE", "account_id": "PRIVATE"}})
-        agy = "Gemini\tWeekly Limit Remaining\t75%\t2026-10-20T00:00:00Z\nOther\tLimit Remaining\t50%\t2026-10-13T05:00:00Z\n"
+        agy = "Gemini\tWeekly Limit Remaining\t75%\t2026-10-20T00:00:00Z\nOther\tFive Hour Limit Remaining\t50%\t2026-10-13T05:00:00Z\n"
         with patch.object(Path, "read_text", return_value=auth), \
                 patch.object(self.usage, "http_json", side_effect=lambda url, *a, **kw: responses[url]), \
                 patch.object(self.usage, "copilot_token", return_value="PRIVATE"), \
@@ -71,10 +71,79 @@ class UsageTests(unittest.TestCase):
         rows = data["rows"]
         self.assertEqual([r["provider"] for r in rows], ["cursor", "cursor", "copilot", "codex", "codex", "antigravity", "antigravity"])
         self.assertEqual([r["used_percent"] for r in rows], [12.34, 56.78, 20, 5, 42, 25, 50])
+        self.assertEqual(rows[2]["window_seconds"], 31 * 86400)
         self.assertEqual([r["window_seconds"] for r in rows[3:5]], [18000, 604800])
+        self.assertEqual([r["window_seconds"] for r in rows[5:]], [604800, 18000])
         self.assertEqual(rows[0]["reset_at"], "2026-10-20T00:00:00+00:00")
         self.assertTrue(all(r["error"] is None for r in rows))
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_copilot_calendar_months_include_leap_years_and_use_utc(self):
+        cases = (
+            ("2026-11-01", 31),
+            ("2026-05-01", 30),
+            ("2026-03-01", 28),
+            ("2028-03-01", 29),
+            ("2027-01-01", 31),
+            ("2026-04-01T02:00:00+02:00", 31),
+            ("2026-11-01T01:00:00+01:00", 31),
+        )
+        for zone in ("UTC", "Europe/Prague"):
+            with patch.dict(os.environ, TZ=zone):
+                time.tzset()
+                for reset, days in cases:
+                    response = {
+                        "quota_snapshots": {"premium_interactions": {"percent_remaining": 80}},
+                        "quota_reset_date": reset,
+                    }
+                    with self.subTest(zone=zone, reset=reset), \
+                            patch.object(self.usage, "copilot_token", return_value="PRIVATE"), \
+                            patch.object(self.usage, "http_json", return_value=response):
+                        rows = self.usage.fetch_wrapper("Copilot", self.usage.copilot_rows)
+                        self.assertIsNone(rows[0]["error"])
+                        self.assertEqual(rows[0]["used_percent"], 20)
+                        self.assertEqual(rows[0]["window_seconds"], days * 86400)
+
+    def test_copilot_unexpected_reset_keeps_usage_with_unknown_window(self):
+        for reset in ("2026-10-20", "2026-11-01T00:00:01Z", "2026-11-01T00:00:00+01:00"):
+            response = {
+                "quota_snapshots": {"premium_interactions": {"percent_remaining": 80}},
+                "quota_reset_date": reset,
+            }
+            with self.subTest(reset=reset), \
+                    patch.object(self.usage, "copilot_token", return_value="PRIVATE"), \
+                    patch.object(self.usage, "http_json", return_value=response):
+                rows = self.usage.fetch_wrapper("Copilot", self.usage.copilot_rows)
+                self.assertIsNone(rows[0]["error"])
+                self.assertIsNone(rows[0]["window_seconds"])
+                self.assertEqual(rows[0]["used_percent"], 20)
+                self.assertEqual(datetime.fromisoformat(rows[0]["reset_at"]), self.usage.local_dt(reset))
+
+    def test_antigravity_only_uses_explicit_known_periods(self):
+        output = "\n".join(
+            f"Gemini Models\t{kind}\t75%\t2026-10-20T00:00:00Z"
+            for kind in ("Weekly Limit Remaining", "Five Hour Limit Remaining", "Limit Remaining", "Monthly Limit Remaining")
+        )
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=output)):
+            rows = self.usage.fetch_wrapper("Antigravity", self.usage.antigravity_rows)
+        self.assertEqual([r["window_seconds"] for r in rows], [604800, 18000, None, None])
+        self.assertEqual([r["label"] for r in rows], [
+            "Antigravity (Gemini Week)", "Antigravity (Gemini 5h)",
+            "Antigravity (Gemini unknown)", "Antigravity (Gemini Monthly)",
+        ])
+        self.assertTrue(all(r["used_percent"] == 25 and r["error"] is None for r in rows))
+
+    def test_unknown_window_retains_usage_and_countdown_in_both_formats(self):
+        rows = self.usage.fetch_wrapper("Test", lambda: self.usage.row("Unknown", 25, "2026-10-20", None))
+        with patch.object(self.usage, "collect_rows", return_value=rows), patch.object(self.usage, "datetime", FixedDateTime):
+            data = json.loads(self.invoke(["--json"]))
+            self.assertIsNone(data["rows"][0]["window_seconds"])
+            self.assertIsNone(data["rows"][0]["error"])
+            actual = self.invoke([])
+            self.assertIn("25.0%", actual)
+            self.assertIn("7.0/? days", actual)
+            self.assertIn("20.10.26", actual)
+            self.assertEqual(self.usage.remaining(self.usage.local_dt("2026-10-12"), None), ("now", "", ""))
 
     def test_terminal_table_keeps_existing_format(self):
         def fixture():

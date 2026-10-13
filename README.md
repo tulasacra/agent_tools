@@ -17,7 +17,7 @@ ln -sfn "$PWD/agent_usage" ~/.local/bin/au
 `au` prints the quota table. `au --json` prints a single snapshot with
 `generated_at` (UTC ISO 8601) and `rows`. Each row contains `provider`, `label`,
 `used_percent` (0–100 scale, possibly higher for overage), `reset_at` (UTC ISO
-8601), `window_seconds`, and `error`. Successful rows have `error: null`;
+8601), `window_seconds` (null when unknown), and `error`. Successful rows have `error: null`;
 failed rows have an error message and null quota fields. Provider failures
 are reported in the data, with exit status 0, so partial results remain usable.
 HTTP requests and subprocess calls have 30-second timeouts.
@@ -42,8 +42,19 @@ The estimate is `elapsed fraction of window / used fraction of quota`, using
 the last snapshot's timestamp. For example, 50% used after 10% of the window
 projects exhaustion at 20% and shows red. Cached readings keep their pace
 until refreshed; a passed reset clears the old warning. Unknown pace and zero
-usage stay neutral. Window lengths come from the existing collectors, which
-currently approximate Copilot's monthly window as 30 days.
+usage stay neutral. Window lengths use the data each provider supplies:
+
+- Cursor: the difference between the reported billing-cycle start and end.
+- Codex: the reported `limit_window_seconds` for each quota.
+- Copilot: the calendar month ending at the reported reset (28–31 days), following
+  [GitHub's premium-quota reset rule](https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/monitor-premium-requests).
+  Resets outside the first of a month at midnight UTC leave the length unknown.
+- Antigravity: the explicit “Weekly” or “Five Hour” label in `agy /usage`.
+  Unrecognized labels leave the length unknown instead of defaulting to five hours.
+
+Unknown window lengths appear as **—** in the popup and **?** in the terminal.
+Usage and reset countdowns still work, but pace projections are unavailable;
+an exhausted quota remains red until its reset passes.
 
 Requires Omarchy's Quickshell plugin system (tested with 4.0.4), Python 3,
 coreutils `timeout`, and the same provider logins/tools as `au`. Install `au`

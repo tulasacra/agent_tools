@@ -264,7 +264,8 @@ Panel {
                                 }
                                 Cell {
                                     width: content.windowWidth
-                                    text: quota.failed ? "—" : Model.duration(quota.modelData.window_seconds)
+                                    text: quota.failed || quota.modelData.window_seconds === null
+                                        ? "—" : Model.duration(quota.modelData.window_seconds)
                                 }
                             }
                             Cell {

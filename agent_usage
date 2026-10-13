@@ -7,7 +7,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = Path.home()
@@ -46,25 +46,38 @@ def epoch_seconds(value):
     return number
 
 
+def calendar_month_seconds(reset_at):
+    end = local_dt(reset_at).astimezone(timezone.utc)
+    # Copilot premium quotas reset on the first at 00:00 UTC. Only infer a
+    # calendar month when the reported reset agrees with that boundary.
+    if end != end.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
+        return None
+    start = (end - timedelta(days=1)).replace(day=1)
+    return (end - start).total_seconds()
+
+
 def remaining(reset_at, window_seconds):
     seconds = (reset_at - datetime.now().astimezone()).total_seconds()
-    days = window_seconds / 86400
-    if abs(days - round(days)) < 0.01:
-        period = str(int(round(days)))
-    else:
-        period = f"{days:.1f}"
     if seconds <= 0:
         return "now", "", ""
+    period = "?"
+    if window_seconds is not None:
+        days = window_seconds / 86400
+        if abs(days - round(days)) < 0.01:
+            period = str(int(round(days)))
+        else:
+            period = f"{days:.1f}"
     return f"{seconds / 86400:.1f}", period, "days"
 
 
 def row(label, percent, reset_at, window_seconds):
     percent = float(percent)
-    window_seconds = float(window_seconds)
     if not math.isfinite(percent) or percent < 0:
         raise ValueError("usage response has an invalid percentage")
-    if not math.isfinite(window_seconds) or window_seconds <= 0:
-        raise ValueError("usage response has an invalid window duration")
+    if window_seconds is not None:
+        window_seconds = float(window_seconds)
+        if not math.isfinite(window_seconds) or window_seconds <= 0:
+            raise ValueError("usage response has an invalid window duration")
     tls.entries.append({
         "provider": tls.provider,
         "label": label,
@@ -226,7 +239,7 @@ def copilot_rows():
     reset = data.get("quota_reset_date")
     if remaining is None or not reset:
         raise RuntimeError("usage response has no premium quota")
-    row("Copilot (*)", 100 - float(remaining), reset, 30 * 86400)
+    row("Copilot (*)", 100 - float(remaining), reset, calendar_month_seconds(reset))
 
 
 def codex_rows():
@@ -272,7 +285,8 @@ def antigravity_rows():
         parts = line.split("\t")
         if len(parts) < 4:
             continue
-        if "Limit Remaining" not in parts[1]:
+        kind = parts[1].strip()
+        if not kind.endswith("Limit Remaining"):
             continue
         try:
             percent_str = "".join(c for c in parts[2] if c.isdigit() or c == ".")
@@ -280,8 +294,12 @@ def antigravity_rows():
         except ValueError:
             continue
         model = "Gemini" if "Gemini" in parts[0] else "*"
-        period = "Week" if "Weekly" in parts[1] else "5h"
-        window = 7 * 86400 if "Weekly" in parts[1] else 5 * 3600
+        # /usage names both windows explicitly. New or unspecified periods
+        # must not silently turn into a five-hour window.
+        period, window = {
+            "Weekly Limit Remaining": ("Week", 7 * 86400),
+            "Five Hour Limit Remaining": ("5h", 5 * 3600),
+        }.get(kind, (kind.removesuffix("Limit Remaining").strip() or "unknown", None))
         date_str = parts[3].strip()
         row(f"Antigravity ({model} {period})", percent, date_str, window)
         shown = True

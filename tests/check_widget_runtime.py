@@ -24,6 +24,8 @@ else:
            "reset_at": "2030-10-20T00:00:00+00:00", "window_seconds": 18000, "error": None}
     if mode == "unavailable":
         row.update(used_percent=None, reset_at=None, window_seconds=None, error="http 401")
+    elif mode == "unknown-window":
+        row["window_seconds"] = None
     print(json.dumps({"generated_at": "2030-10-13T00:00:00+00:00", "rows": [row]}))
 '''
 
@@ -125,6 +127,14 @@ def main():
                 assert state["rows"][0]["used_percent"] is None
                 assert state["rows"][0]["error"] == "http 401" and not state["error"]
                 print("PASS: unavailable provider is an error row, not zero usage")
+
+                ipc("mode", "unknown-window")
+                ipc("action", "refresh")
+                state = wait_for(lambda state: not state["busy"])
+                assert state["rows"][0]["used_percent"] == 12.5
+                assert state["rows"][0]["window_seconds"] is None
+                assert state["rows"][0]["error"] is None and not state["error"]
+                print("PASS: unknown window preserves quota data without rejecting the snapshot")
 
                 ipc("mode", "success")
                 ipc("action", "open")

@@ -20,8 +20,9 @@ function parseSnapshot(text) {
                 throw new Error("au returned an invalid error row.");
         } else if (row.error !== null || typeof row.used_percent !== "number"
                 || !isFinite(row.used_percent) || row.used_percent < 0
-                || typeof row.window_seconds !== "number" || !isFinite(row.window_seconds)
-                || row.window_seconds <= 0 || typeof row.reset_at !== "string"
+                || (row.window_seconds !== null && (typeof row.window_seconds !== "number"
+                    || !isFinite(row.window_seconds) || row.window_seconds <= 0))
+                || typeof row.reset_at !== "string"
                 || !isFinite(Date.parse(row.reset_at))) {
             throw new Error("au returned an invalid quota row.");
         }
@@ -46,17 +47,13 @@ function countdown(resetAt, nowMs) {
 function usagePace(row, generatedAt, nowMs) {
     var unknown = {level: "normal", hint: "Pace unavailable. Refresh quota data."};
     if (!row || row.error !== null || typeof row.used_percent !== "number"
-            || !isFinite(row.used_percent) || row.used_percent < 0
-            || typeof row.window_seconds !== "number" || !isFinite(row.window_seconds)
-            || row.window_seconds <= 0)
+            || !isFinite(row.used_percent) || row.used_percent < 0)
         return unknown;
 
     var observedMs = Date.parse(generatedAt);
     var resetMs = Date.parse(row.reset_at);
-    var windowMs = row.window_seconds * 1000;
-    var elapsedMs = observedMs - (resetMs - windowMs);
     if (!isFinite(observedMs) || !isFinite(resetMs) || !isFinite(nowMs)
-            || observedMs > nowMs || elapsedMs < 0)
+            || observedMs > nowMs)
         return unknown;
     if (nowMs >= resetMs)
         return {level: "normal", hint: "This reset has passed. Refresh quota data."};
@@ -64,7 +61,14 @@ function usagePace(row, generatedAt, nowMs) {
         return {level: "red", hint: "Quota exhausted at the last refresh."};
     if (row.used_percent === 0)
         return {level: "normal", hint: "No quota used at the last refresh."};
-    if (elapsedMs === 0)
+    if (row.window_seconds === null)
+        return {level: "normal", hint: "Pace unavailable: window length is unknown."};
+    if (typeof row.window_seconds !== "number" || !isFinite(row.window_seconds)
+            || row.window_seconds <= 0)
+        return unknown;
+    var windowMs = row.window_seconds * 1000;
+    var elapsedMs = observedMs - (resetMs - windowMs);
+    if (elapsedMs <= 0)
         return unknown;
 
     // Use the observation time, not the ticking clock: waiting without new

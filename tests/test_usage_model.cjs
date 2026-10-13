@@ -27,6 +27,16 @@ test('accepts zero usage, partial failures, and over-quota values without confla
   assert.equal(parsed.rows[0].used_percent, 125.5);
 });
 
+test('accepts an explicitly unknown window while retaining quota and reset data', () => {
+  const data = snapshot();
+  data.rows[0].window_seconds = null;
+  const row = model.parseSnapshot(JSON.stringify(data)).rows[0];
+  assert.equal(row.window_seconds, null);
+  assert.equal(row.used_percent, 0);
+  assert.equal(row.reset_at, data.rows[0].reset_at);
+  assert.equal(row.error, null);
+});
+
 test('rejects malformed command output and missing snapshot fields', () => {
   for (const text of ['', 'not json', '{}', 'null', '{"rows":[]}']) {
     assert.throws(() => model.parseSnapshot(text));
@@ -34,7 +44,7 @@ test('rejects malformed command output and missing snapshot fields', () => {
 });
 
 test('rejects missing quotas rather than coercing null to zero', () => {
-  for (const [key, value] of [['used_percent', null], ['used_percent', '4'], ['used_percent', -1], ['reset_at', 'bad date'], ['window_seconds', 0], ['error', '']]) {
+  for (const [key, value] of [['used_percent', null], ['used_percent', '4'], ['used_percent', -1], ['reset_at', 'bad date'], ['window_seconds', 0], ['window_seconds', -1], ['window_seconds', '18000'], ['window_seconds', undefined], ['error', '']]) {
     const data = snapshot();
     data.rows[0][key] = value;
     assert.throws(() => model.parseSnapshot(JSON.stringify(data)));
@@ -97,6 +107,25 @@ test('unused and unknown pace stay neutral; exhausted active quotas stay red', (
   const data = snapshot();
   assert.equal(model.usagePace(data.rows[1], data.generated_at, Date.parse(data.generated_at)).level, 'normal');
   assert.equal(model.usagePace(data.rows[0], 'not a date', Date.now()).level, 'normal');
+});
+
+test('unknown windows disable projections but still flag an exhausted quota until reset', () => {
+  const data = snapshot();
+  const row = data.rows[0];
+  const now = Date.parse(data.generated_at);
+  row.window_seconds = null;
+  row.used_percent = 75;
+  const pace = model.usagePace(row, data.generated_at, now);
+  assert.equal(pace.level, 'normal');
+  assert.match(pace.hint, /window length is unknown/);
+  assert.equal(model.countdown(row.reset_at, now), '5h');
+  row.used_percent = 0;
+  assert.match(model.usagePace(row, data.generated_at, now).hint, /No quota used/);
+  row.used_percent = 100;
+  assert.equal(model.usagePace(row, data.generated_at, now).level, 'red');
+  const expired = model.usagePace(row, data.generated_at, Date.parse(row.reset_at));
+  assert.equal(expired.level, 'normal');
+  assert.match(expired.hint, /reset has passed/);
 });
 
 test('cached pace stays fixed until refresh; passed resets clear the old warning', () => {
