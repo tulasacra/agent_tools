@@ -17,10 +17,38 @@ ln -sfn "$PWD/agent_usage" ~/.local/bin/au
 `au` prints the quota table. `au --json` prints a single snapshot with
 `generated_at` (UTC ISO 8601) and `rows`. Each row contains `provider`, `label`,
 `used_percent` (0–100 scale, possibly higher for overage), `reset_at` (UTC ISO
-8601), `window_seconds` (null when unknown), and `error`. Successful rows have `error: null`;
+8601), `window_seconds` (null when unknown), `manual_resets_available` (a
+nonnegative integer or null), `manual_reset_expirations` (described below), and
+`error`. Successful rows have `error: null`;
 failed rows have an error message and null quota fields. Provider failures
 are reported in the data, with exit status 0, so partial results remain usable.
 HTTP requests and subprocess calls have 30-second timeouts.
+
+Codex's **Manual resets available** balance appears once beneath its quota rows
+in the terminal and popup, followed by the next expiration in local time:
+`Manual resets available: 3 · Next expiry: 22.10.26 23:13`.
+Hover over the popup summary to see all returned expiration dates, earliest
+first, with timezone abbreviations. A zero balance omits the expiration.
+
+Usage and `/wham/rate-limit-reset-credits` details are fetched concurrently with
+the same 30-second timeout. The balance uses the details response's valid
+`available_count`, falling back to `rate_limit_reset_credits.available_count`
+from usage, independently of `applicable_available_count`. The number of
+returned detail entries never replaces the balance; the service may cap them.
+If only some dates are known, the summary says **Earliest known expiry** and
+the popup tooltip explains the missing details. Passed dates say **passed;
+refresh**; the cached balance stays unchanged until refreshed.
+
+Both `manual_resets_available` and `manual_reset_expirations` are shared across
+Codex windows and repeated on their JSON rows. Expirations are an array of UTC
+ISO timestamps (duplicates retained) or null entries for unknown dates;
+the whole field is null if details are unavailable. A null date never means
+“never expires.” Other providers and failed rows have both fields set to null.
+Zero displays as `0`; unknown balances or expirations display as `?` in the
+terminal and **—** in the popup without hiding valid quotas. Optional details
+failures preserve usage and the fallback balance. Older snapshots without these
+fields remain supported. Both use the normal snapshot refresh; the tools only
+display the information and do not redeem resets.
 
 ## Omarchy popup
 

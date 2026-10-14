@@ -3,6 +3,7 @@ import argparse
 import concurrent.futures
 import json
 import math
+import re
 import subprocess
 import threading
 import urllib.error
@@ -70,7 +71,60 @@ def remaining(reset_at, window_seconds):
     return f"{seconds / 86400:.1f}", period, "days"
 
 
-def row(label, percent, reset_at, window_seconds):
+def manual_reset_count(value):
+    return value if type(value) is int and value >= 0 else None
+
+
+def manual_reset_expiration(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?"
+            r"(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])", value):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def manual_reset_dates(value):
+    if not isinstance(value, list):
+        return None
+    dates = [manual_reset_expiration(date) for date in value]
+    known = sorted((date for date in dates if date is not None), key=datetime.fromisoformat)
+    return known + [None] * dates.count(None)
+
+
+def manual_reset_details(data):
+    if not isinstance(data, dict):
+        return None, None
+    available = manual_reset_count(data.get("available_count"))
+    credits = data.get("credits")
+    if not isinstance(credits, list) or any(not isinstance(credit, dict) for credit in credits):
+        return available, None
+    dates = [credit.get("expires_at") for credit in credits
+             if credit.get("status") == "available" and credit.get("reset_type") == "codex_rate_limits"]
+    return available, manual_reset_dates(dates)
+
+
+def manual_reset_summary(record):
+    count = manual_reset_count(record.get("manual_resets_available"))
+    summary = f"Manual resets available: {count if count is not None else '?'}"
+    if count == 0:
+        return summary
+    dates = manual_reset_dates(record.get("manual_reset_expirations"))
+    if not dates or dates[0] is None:
+        return summary + " · Next expiry: ?"
+    incomplete = count is None or len(dates) != count or None in dates
+    label = "Earliest known expiry" if incomplete else "Next expiry"
+    earliest = local_dt(dates[0])
+    summary += f" · {label}: {earliest.strftime('%d.%m.%y %H:%M')}"
+    if earliest <= datetime.now().astimezone():
+        summary += " (passed; refresh)"
+    return summary
+
+
+def row(label, percent, reset_at, window_seconds, *, manual_resets_available=None,
+        manual_reset_expirations=None):
     percent = float(percent)
     if not math.isfinite(percent) or percent < 0:
         raise ValueError("usage response has an invalid percentage")
@@ -84,6 +138,8 @@ def row(label, percent, reset_at, window_seconds):
         "used_percent": percent,
         "reset_at": local_dt(reset_at).astimezone(timezone.utc).isoformat(),
         "window_seconds": window_seconds,
+        "manual_resets_available": manual_reset_count(manual_resets_available),
+        "manual_reset_expirations": manual_reset_dates(manual_reset_expirations),
         "error": None,
     })
 
@@ -95,12 +151,15 @@ def fail(label, message):
         "used_percent": None,
         "reset_at": None,
         "window_seconds": None,
+        "manual_resets_available": None,
+        "manual_reset_expirations": None,
         "error": message,
     })
 
 
 def print_table(rows):
     entries = []
+    last_codex = max((index for index, record in enumerate(rows) if record["provider"] == "codex"), default=-1)
     for record in rows:
         if record["error"] is not None:
             entries.append((record["label"], record["error"]))
@@ -156,17 +215,19 @@ def print_table(rows):
         f"{'-' * left_w}  "
         f"{'-' * date_w}"
     )
-    for entry in entries:
+    for index, (record, entry) in enumerate(zip(rows, entries)):
         if len(entry) == 2:
             print(f"{entry[0]:<{agent_w}}  {entry[1]}")
-            continue
-        label, used, number, period, unit, date = entry
-        print(
-            f"{label:<{agent_w}}  "
-            f"{used:>{used_w}}  "
-            f"{left_cell(number, period, unit)}  "
-            f"{date:<{date_w}}".rstrip()
-        )
+        else:
+            label, used, number, period, unit, date = entry
+            print(
+                f"{label:<{agent_w}}  "
+                f"{used:>{used_w}}  "
+                f"{left_cell(number, period, unit)}  "
+                f"{date:<{date_w}}".rstrip()
+            )
+        if index == last_codex:
+            print(f"  {manual_reset_summary(record)}")
 
 
 def cursor_rows():
@@ -245,14 +306,30 @@ def copilot_rows():
 def codex_rows():
     auth = json.loads((HOME / ".codex/auth.json").read_text())
     tokens = auth["tokens"]
-    data = http_json(
-        "https://chatgpt.com/backend-api/wham/usage",
-        {
-            "Authorization": f"Bearer {tokens['access_token']}",
-            "ChatGPT-Account-ID": tokens["account_id"],
-            "Accept": "application/json",
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {tokens['access_token']}",
+        "ChatGPT-Account-ID": tokens["account_id"],
+        "Accept": "application/json",
+    }
+    # These requests share the same timeout budget; row construction stays on
+    # this provider thread because the row accumulator is thread-local.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        usage_request = executor.submit(http_json, "https://chatgpt.com/backend-api/wham/usage", headers)
+        details_request = executor.submit(http_json, "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", headers)
+        try:
+            details = details_request.result()
+        except urllib.error.HTTPError as error:
+            error.close()
+            details = None
+        except Exception:
+            details = None
+        data = usage_request.result()
+    credits = data.get("rate_limit_reset_credits")
+    # The shared balance is separate from credits applicable to current limits.
+    available = credits.get("available_count") if isinstance(credits, dict) else None
+    detail_count, expirations = manual_reset_details(details)
+    if detail_count is not None:
+        available = detail_count
     windows = data.get("rate_limit") or {}
     shown = False
     for window in windows.values():
@@ -263,7 +340,8 @@ def codex_rows():
         window_seconds = window.get("limit_window_seconds")
         if percent is None or reset is None or not window_seconds:
             continue
-        row("Codex (Gpt)", percent, reset, window_seconds)
+        row("Codex (Gpt)", percent, reset, window_seconds,
+            manual_resets_available=available, manual_reset_expirations=expirations)
         shown = True
     if not shown:
         raise RuntimeError("usage response has no rate limit windows")

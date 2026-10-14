@@ -28,6 +28,10 @@ Panel {
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
 
+    function formatResetExpiry(value, includeZone) {
+        return Qt.formatDateTime(new Date(value), includeZone ? "dd.MM.yy HH:mm t" : "dd.MM.yy HH:mm");
+    }
+
     function refresh() {
         if (busy) return;
         refreshError = "";
@@ -236,6 +240,8 @@ Panel {
                             required property int index
                             readonly property bool failed: modelData.error !== null
                             readonly property var pace: Model.usagePace(modelData, root.updatedAt, root.nowMs)
+                            readonly property string resetSummary: Model.manualResetSummary(root.rows, index, root.nowMs, root.formatResetExpiry)
+                            readonly property string resetTooltip: Model.manualResetTooltip(modelData, root.nowMs, root.formatResetExpiry)
                             width: content.width
                             spacing: Style.space(4)
 
@@ -287,6 +293,27 @@ Panel {
                                 font.pixelSize: Style.font.bodySmall
                                 wrapMode: Text.Wrap
                                 elide: Text.ElideNone
+                            }
+                            Cell {
+                                visible: quota.resetSummary !== ""
+                                width: parent.width
+                                text: quota.resetSummary
+                                color: root.muted
+                                font.pixelSize: Style.font.bodySmall
+                                wrapMode: Text.Wrap
+                                elide: Text.ElideNone
+
+                                MouseArea {
+                                    id: resetHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.NoButton
+                                }
+                                PanelToolTip {
+                                    visible: resetHover.containsMouse && quota.resetTooltip !== ""
+                                    text: quota.resetTooltip
+                                    fontFamily: root.fontFamily
+                                }
                             }
                             PanelSeparator {
                                 visible: quota.index < root.rows.length - 1

@@ -37,6 +37,127 @@ test('accepts an explicitly unknown window while retaining quota and reset data'
   assert.equal(row.error, null);
 });
 
+test('manual reset balances preserve zero and normalize missing or invalid values to unknown', () => {
+  for (const value of [3, 0, undefined, null, -1, 1.5, '3', true, false, [], {}, Infinity, NaN]) {
+    const data = snapshot();
+    data.rows[0].manual_resets_available = value;
+    const parsed = model.parseSnapshot(JSON.stringify(data));
+    const expected = value === 3 || value === 0 ? value : null;
+    assert.equal(parsed.rows[0].manual_resets_available, expected);
+    assert.equal(parsed.rows[0].used_percent, 0);
+    assert.equal(parsed.rows[0].error, null);
+    assert.equal(parsed.rows[1].manual_resets_available, null);
+    assert.equal(parsed.rows[0].manual_reset_expirations, null);
+    assert.equal(model.manualResetSummary(parsed.rows, 0),
+      `Manual resets available: ${expected === null ? '—' : expected}${expected === 0 ? '' : ' · Next expiry: —'}`);
+  }
+});
+
+test('manual reset summary appears once after the final Codex window only', () => {
+  const data = snapshot();
+  data.rows[0].manual_resets_available = 3;
+  data.rows.splice(1, 0, {...data.rows[0], window_seconds: 604800});
+  const {rows} = model.parseSnapshot(JSON.stringify(data));
+  assert.equal(model.manualResetSummary(rows, 0), '');
+  assert.equal(model.manualResetSummary(rows, 1), 'Manual resets available: 3 · Next expiry: —');
+  assert.equal(model.manualResetSummary(rows, 2), '');
+  rows.pop(); // The final provider also gets its summary.
+  assert.equal(model.manualResetSummary(rows, 1), 'Manual resets available: 3 · Next expiry: —');
+});
+
+test('unavailable Codex balances stay unknown alongside the provider error', () => {
+  const data = snapshot();
+  data.rows = [{...data.rows[1], provider: 'codex', label: 'Codex', manual_resets_available: null}];
+  const parsed = model.parseSnapshot(JSON.stringify(data));
+  assert.equal(parsed.rows[0].error, 'http 401');
+  assert.equal(model.manualResetSummary(parsed.rows, 0), 'Manual resets available: — · Next expiry: —');
+});
+
+const earlyExpiry = '2026-10-22T21:13:23.818Z';
+const lateExpiry = '2026-10-29T19:44:01.802Z';
+const expiryNow = Date.parse('2026-10-14T00:00:00Z');
+// The widget supplies Qt's local formatter; test the model independently of Qt.
+const formatExpiry = (value, includeZone) => `${value}${includeZone ? ' (local zone)' : ''}`;
+
+function withExpirations(count, expirations) {
+  const data = snapshot();
+  Object.assign(data.rows[0], {manual_resets_available: count, manual_reset_expirations: expirations});
+  return model.parseSnapshot(JSON.stringify(data)).rows;
+}
+
+test('expiration details normalize offsets, sort by instant, and preserve duplicates and unknowns', () => {
+  const rows = withExpirations(4, [lateExpiry, null, '2026-10-22T23:13:23.818918+02:00', earlyExpiry]);
+  assert.deepEqual(Array.from(rows[0].manual_reset_expirations), [earlyExpiry, earlyExpiry, lateExpiry, null]);
+  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
+    `Manual resets available: 4 · Earliest known expiry: ${earlyExpiry}`);
+  assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry), [
+    'Reset expirations (local time)', `${earlyExpiry} (local zone)`, `${earlyExpiry} (local zone)`,
+    `${lateExpiry} (local zone)`, 'Expiration unknown',
+  ].join('\n'));
+});
+
+test('complete expiry details show the soonest date inline and all dates in the tooltip', () => {
+  const rows = withExpirations(2, [lateExpiry, earlyExpiry]);
+  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
+    `Manual resets available: 2 · Next expiry: ${earlyExpiry}`);
+  assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry),
+    `Reset expirations (local time)\n${earlyExpiry} (local zone)\n${lateExpiry} (local zone)`);
+  rows.splice(1, 0, {...rows[0], window_seconds: 604800});
+  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), '');
+  assert.match(model.manualResetSummary(rows, 1, expiryNow, formatExpiry), /Next expiry:/);
+  rows.splice(1, 0, {...rows[0], provider: 'cursor'});
+  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), '');
+  assert.equal(model.manualResetSummary(rows, 1, expiryNow, formatExpiry), '');
+  assert.match(model.manualResetSummary(rows, 2, expiryNow, formatExpiry), /Next expiry:/);
+});
+
+test('sub-millisecond expiry precision cannot round into the following minute', () => {
+  const rows = withExpirations(1, ['2026-10-22T21:13:59.999999+00:00']);
+  assert.deepEqual(Array.from(rows[0].manual_reset_expirations), ['2026-10-22T21:13:59.999Z']);
+});
+
+test('partial or mismatched expiry details never claim to establish the next expiration', () => {
+  for (const [count, dates, note] of [
+    [3, [lateExpiry], 'Details returned for 1 of 3 available resets.'],
+    [1, [lateExpiry, earlyExpiry], 'Details and reset balance differ; refresh to check.'],
+    [null, [lateExpiry], 'Total reset count unavailable.'],
+  ]) {
+    const rows = withExpirations(count, dates);
+    assert.match(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), /Earliest known expiry:/);
+    assert.ok(model.manualResetTooltip(rows[0], expiryNow, formatExpiry).endsWith(note));
+  }
+});
+
+test('missing and malformed optional details keep the balance and quotas usable', () => {
+  for (const value of [undefined, null, 'bad', {}, 0, false]) {
+    const rows = withExpirations(3, value);
+    assert.equal(rows[0].manual_reset_expirations, null);
+    assert.equal(rows[0].manual_resets_available, 3);
+    assert.equal(rows[0].used_percent, 0);
+    assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
+      'Manual resets available: 3 · Next expiry: —');
+    assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry), 'Expiration details unavailable.');
+  }
+  const rows = withExpirations(7, [null, 'bad', '3', 123, false, {}, '2026-10-22T99:00:00Z']);
+  assert.deepEqual(Array.from(rows[0].manual_reset_expirations), Array(7).fill(null));
+  assert.match(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), /Next expiry: —$/);
+  assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry).split('Expiration unknown').length - 1, 7);
+  const empty = withExpirations(3, []);
+  assert.match(model.manualResetTooltip(empty[0], expiryNow, formatExpiry), /Details returned for 0 of 3/);
+});
+
+test('zero balances hide expirations and passed cached dates request refresh without changing the balance', () => {
+  const zero = withExpirations(0, [earlyExpiry]);
+  assert.equal(model.manualResetSummary(zero, 0, expiryNow, formatExpiry), 'Manual resets available: 0');
+  assert.equal(model.manualResetTooltip(zero[0], expiryNow, formatExpiry), '');
+  const rows = withExpirations(2, [earlyExpiry, lateExpiry]);
+  const passed = Date.parse(earlyExpiry);
+  assert.match(model.manualResetSummary(rows, 0, passed, formatExpiry), / \(passed; refresh\)$/);
+  assert.equal(model.manualResetTooltip(rows[0], passed, formatExpiry).split('(passed; refresh)').length - 1, 1);
+  assert.equal(rows[0].manual_resets_available, 2);
+  assert.equal(rows[0].manual_reset_expirations.length, 2);
+});
+
 test('rejects malformed command output and missing snapshot fields', () => {
   for (const text of ['', 'not json', '{}', 'null', '{"rows":[]}']) {
     assert.throws(() => model.parseSnapshot(text));

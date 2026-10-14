@@ -26,8 +26,61 @@ function parseSnapshot(text) {
                 || !isFinite(Date.parse(row.reset_at))) {
             throw new Error("au returned an invalid quota row.");
         }
+        // Older snapshots and malformed optional balances keep valid quotas usable.
+        var count = row.manual_resets_available;
+        row.manual_resets_available = typeof count === "number" && isFinite(count)
+            && count >= 0 && Math.floor(count) === count ? count : null;
+        var expirations = row.manual_reset_expirations;
+        row.manual_reset_expirations = Array.isArray(expirations) ? expirations.map(function(value) {
+            if (typeof value !== "string"
+                    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value))
+                return null;
+            // Qt rounds extra fractional digits; truncate them like JS Dates
+            // so a near-minute expiry cannot round into the following minute.
+            value = value.replace(/(\.\d{3})\d+/, "$1");
+            return isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+        }).sort(function(a, b) {
+            if (a === null) return b === null ? 0 : 1;
+            if (b === null) return -1;
+            return Date.parse(a) - Date.parse(b);
+        }) : null;
     }
     return data;
+}
+
+function manualResetSummary(rows, index, nowMs, formatDate) {
+    var row = rows[index];
+    if (!row || row.provider !== "codex") return "";
+    for (var next = index + 1; next < rows.length; next++) {
+        if (rows[next].provider === "codex") return "";
+    }
+    var count = row.manual_resets_available;
+    var summary = "Manual resets available: " + (count == null ? "—" : count);
+    if (count === 0) return summary;
+    var dates = row.manual_reset_expirations;
+    var first = dates && dates.length > 0 ? dates[0] : null;
+    if (first === null) return summary + " · Next expiry: —";
+    var complete = count != null && dates.length === count && dates.indexOf(null) < 0;
+    return summary + (complete ? " · Next expiry: " : " · Earliest known expiry: ")
+        + formatDate(first, false) + (Date.parse(first) <= nowMs ? " (passed; refresh)" : "");
+}
+
+function manualResetTooltip(row, nowMs, formatDate) {
+    if (row.provider !== "codex" || row.manual_resets_available === 0) return "";
+    var dates = row.manual_reset_expirations;
+    if (dates == null) return "Expiration details unavailable.";
+    var lines = ["Reset expirations (local time)"];
+    for (var i = 0; i < dates.length; i++) {
+        lines.push(dates[i] === null ? "Expiration unknown"
+            : formatDate(dates[i], true) + (Date.parse(dates[i]) <= nowMs ? " (passed; refresh)" : ""));
+    }
+    var count = row.manual_resets_available;
+    if (count == null) lines.push("Total reset count unavailable.");
+    else if (dates.length < count)
+        lines.push("Details returned for " + dates.length + " of " + count + " available resets.");
+    else if (dates.length > count)
+        lines.push("Details and reset balance differ; refresh to check.");
+    return lines.join("\n");
 }
 
 function duration(seconds) {

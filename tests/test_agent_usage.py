@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "agent_usage"
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_DETAILS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 
 
 class FixedDateTime(datetime):
@@ -38,6 +40,27 @@ class UsageTests(unittest.TestCase):
             self.usage.main(args)
         return out.getvalue()
 
+    def codex_usage(self, count=3):
+        return {
+            "rate_limit_reset_credits": {"available_count": count, "applicable_available_count": 0},
+            "rate_limit": {"primary_window": {
+                "used_percent": 25, "reset_at": 1792454400, "limit_window_seconds": 18000,
+            }},
+        }
+
+    def fetch_codex(self, details, usage=None):
+        auth = json.dumps({"tokens": {"access_token": "PRIVATE", "account_id": "PRIVATE"}})
+
+        def request(url, headers):
+            response = (self.codex_usage() if usage is None else usage) if url == CODEX_USAGE_URL else details
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        with patch.object(Path, "read_text", return_value=auth), \
+                patch.object(self.usage, "http_json", side_effect=request):
+            return self.usage.fetch_wrapper("Codex", self.usage.codex_rows)
+
     def test_collectors_json_multiple_windows_and_credentials_stay_private(self):
         reset = 1792454400  # 2026-10-20 UTC
         responses = {
@@ -51,11 +74,17 @@ class UsageTests(unittest.TestCase):
                 "quota_reset_date": "2026-11-01",
             },
             "https://chatgpt.com/backend-api/wham/usage": {
+                "rate_limit_reset_credits": {"available_count": 3, "applicable_available_count": 0},
                 "rate_limit": {
                     "allowed": True,
                     "primary_window": {"used_percent": 5, "reset_at": reset, "limit_window_seconds": 18000},
                     "secondary_window": {"used_percent": 42, "reset_at": reset, "limit_window_seconds": 604800},
                 },
+            },
+            CODEX_DETAILS_URL: {
+                "available_count": 3,
+                "credits": [{"status": "available", "reset_type": "codex_rate_limits", "expires_at": date}
+                            for date in ("2026-10-22T21:13:00Z", "2026-10-29T19:44:00Z", "2026-11-07T00:05:00Z")],
             },
         }
         auth = json.dumps({"accessToken": "PRIVATE", "tokens": {"access_token": "PRIVATE", "account_id": "PRIVATE"}})
@@ -73,10 +102,226 @@ class UsageTests(unittest.TestCase):
         self.assertEqual([r["used_percent"] for r in rows], [12.34, 56.78, 20, 5, 42, 25, 50])
         self.assertEqual(rows[2]["window_seconds"], 31 * 86400)
         self.assertEqual([r["window_seconds"] for r in rows[3:5]], [18000, 604800])
+        self.assertEqual([r["manual_resets_available"] for r in rows], [None, None, None, 3, 3, None, None])
+        dates = ["2026-10-22T21:13:00+00:00", "2026-10-29T19:44:00+00:00", "2026-11-07T00:05:00+00:00"]
+        self.assertEqual([r["manual_reset_expirations"] for r in rows], [None, None, None, dates, dates, None, None])
         self.assertEqual([r["window_seconds"] for r in rows[5:]], [604800, 18000])
         self.assertEqual(rows[0]["reset_at"], "2026-10-20T00:00:00+00:00")
         self.assertTrue(all(r["error"] is None for r in rows))
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_codex_manual_reset_balance_preserves_zero_and_unknown(self):
+        auth = json.dumps({"tokens": {"access_token": "PRIVATE", "account_id": "PRIVATE"}})
+        cases = [
+            ({}, None),
+            ({"rate_limit_reset_credits": {"available_count": 0, "applicable_available_count": 0}}, 0),
+            ({"rate_limit_reset_credits": {"available_count": 3, "applicable_available_count": 0}}, 3),
+        ]
+        cases += [({"rate_limit_reset_credits": credits}, None) for credits in (
+            None, {}, [], "invalid", 3, {"applicable_available_count": 2},
+            *({"available_count": count} for count in (None, -1, 1.5, "3", True, False, [], {}, float("nan"), float("inf"))),
+        )]
+        for fields, expected in cases:
+            response = {
+                "rate_limit": {"primary_window": {
+                    "used_percent": 25, "reset_at": 1792454400, "limit_window_seconds": 18000,
+                }},
+                **fields,
+            }
+            with self.subTest(fields=fields), patch.object(Path, "read_text", return_value=auth), \
+                    patch.object(self.usage, "http_json", side_effect=lambda url, headers: response if url == CODEX_USAGE_URL else {}) as request:
+                rows = self.usage.fetch_wrapper("Codex", self.usage.codex_rows)
+            self.assertEqual(request.call_count, 2)
+            self.assertEqual({call.args[0] for call in request.call_args_list}, {CODEX_USAGE_URL, CODEX_DETAILS_URL})
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["manual_resets_available"], expected)
+            self.assertIsNone(rows[0]["manual_reset_expirations"])
+            self.assertEqual(rows[0]["used_percent"], 25)
+            self.assertIsNone(rows[0]["error"])
+            json.dumps(rows, allow_nan=False)
+
+    def test_terminal_manual_resets_appear_once_after_codex_windows(self):
+        for count in (3, 0, None):
+            with self.subTest(count=count):
+                rows = self.usage.fetch_wrapper("Cursor", lambda: self.usage.row("Cursor", 10, "2026-10-20", 86400))
+                for label, window in (("Codex 5h", 18000), ("Codex Week", 604800)):
+                    rows += self.usage.fetch_wrapper("Codex", lambda: self.usage.row(
+                        label, 25, "2026-10-20", window, manual_resets_available=count))
+                rows += self.usage.fetch_wrapper("Copilot", lambda: self.usage.fail("Copilot", "http 401"))
+                with patch.object(self.usage, "collect_rows", return_value=rows):
+                    output = self.invoke([])
+                summary = f"  Manual resets available: {count if count is not None else '?'}"
+                if count != 0:
+                    summary += " · Next expiry: ?"
+                self.assertEqual(output.count("Manual resets available:"), 1)
+                lines = output.splitlines()
+                index = lines.index(summary)
+                self.assertTrue(lines[index - 1].startswith("Codex Week"))
+                self.assertTrue(lines[index + 1].startswith("Copilot"))
+
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                rows = self.usage.fetch_wrapper("Codex", lambda: self.usage.fail("Codex", "http 401")
+                                               if failed else self.usage.row("Codex", 25, "2026-10-20", 18000))
+                del rows[0]["manual_resets_available"]  # Older snapshots remain displayable.
+                del rows[0]["manual_reset_expirations"]
+                with patch.object(self.usage, "collect_rows", return_value=rows):
+                    output = self.invoke([])
+                self.assertTrue(output.endswith("  Manual resets available: ? · Next expiry: ?\n"))
+
+    def test_codex_details_normalize_filter_and_preserve_unknown_and_duplicate_dates(self):
+        available = {"status": "available", "reset_type": "codex_rate_limits"}
+        details = {"available_count": 6, "credits": [
+            {**available, "expires_at": "2026-10-29T20:44:00+01:00"},
+            {**available, "expires_at": "2026-10-22T21:13:23.818918Z"},
+            {**available, "expires_at": "2026-10-22T23:13:23.818918+02:00"},
+            {**available, "expires_at": "bad date"},
+            {**available, "expires_at": None},
+            available,
+            {**available, "status": "used", "expires_at": "2026-10-01T00:00:00Z"},
+            {**available, "status": "expired", "expires_at": "2026-10-02T00:00:00Z"},
+            {**available, "reset_type": "another_product", "expires_at": "2026-10-03T00:00:00Z"},
+        ]}
+        rows = self.fetch_codex(details)
+        self.assertEqual(rows[0]["manual_resets_available"], 6)
+        self.assertEqual(rows[0]["manual_reset_expirations"], [
+            "2026-10-22T21:13:23.818918+00:00", "2026-10-22T21:13:23.818918+00:00",
+            "2026-10-29T19:44:00+00:00", None, None, None,
+        ])
+        self.assertEqual(rows[0]["used_percent"], 25)
+        self.assertIsNone(rows[0]["error"])
+
+    def test_codex_detail_counts_override_or_fall_back_without_inference(self):
+        credit = {"status": "available", "reset_type": "codex_rate_limits", "expires_at": "2026-10-22T21:13:00Z"}
+        for count in (0, 1, 7, None, -1, 1.5, "3", True, [], {}, float("nan")):
+            for usage_count in (3, None):
+                with self.subTest(details=count, usage=usage_count):
+                    rows = self.fetch_codex({"available_count": count, "credits": [credit]}, self.codex_usage(usage_count))
+                    expected = count if type(count) is int and count >= 0 else usage_count
+                    self.assertEqual(rows[0]["manual_resets_available"], expected)
+                    self.assertEqual(rows[0]["manual_reset_expirations"], ["2026-10-22T21:13:00+00:00"])
+                    self.assertIsNone(rows[0]["error"])
+                    json.dumps(rows, allow_nan=False)
+        rows = self.fetch_codex({"credits": []}, self.codex_usage(None))
+        self.assertIsNone(rows[0]["manual_resets_available"])
+        self.assertEqual(rows[0]["manual_reset_expirations"], [])
+
+    def test_codex_malformed_optional_details_preserve_usage_and_balance(self):
+        cases = (None, [], "invalid", 3, {}, {"credits": None}, {"credits": {}},
+                 {"credits": "invalid"}, {"credits": [None]}, {"credits": ["invalid"]})
+        for details in cases:
+            with self.subTest(details=details):
+                row = self.fetch_codex(details)[0]
+                self.assertEqual(row["manual_resets_available"], 3)
+                self.assertIsNone(row["manual_reset_expirations"])
+                self.assertEqual(row["used_percent"], 25)
+                self.assertIsNone(row["error"])
+        row = self.fetch_codex({"available_count": 7, "credits": "invalid"})[0]
+        self.assertEqual(row["manual_resets_available"], 7)
+        self.assertIsNone(row["manual_reset_expirations"])
+        for date in (None, "", "invalid", True, 1792454400, [], {}, float("nan"), "99999-10-22T00:00:00Z",
+                     "3", "1792454400", "2026-10-22", "2026-10-22T21:13:23.818918", "2026-10-22T21:13Z",
+                     "2026-10-22T00:00:00+01:99", "2026-02-30T00:00:00Z"):
+            with self.subTest(date=date):
+                row = self.fetch_codex({"credits": [{"status": "available", "reset_type": "codex_rate_limits", "expires_at": date}]})[0]
+                self.assertEqual(row["manual_reset_expirations"], [None])
+                self.assertIsNone(row["error"])
+
+    def test_codex_optional_request_failures_preserve_usage_and_close_http_errors(self):
+        body = io.BytesIO(b"private error details")
+        errors = (urllib.error.HTTPError(CODEX_DETAILS_URL, 403, "forbidden", {}, body),
+                  urllib.error.URLError("unavailable"), TimeoutError("timed out"),
+                  json.JSONDecodeError("invalid JSON", "", 0))
+        for error in errors:
+            with self.subTest(error=type(error).__name__):
+                row = self.fetch_codex(error)[0]
+                self.assertEqual(row["manual_resets_available"], 3)
+                self.assertIsNone(row["manual_reset_expirations"])
+                self.assertEqual(row["used_percent"], 25)
+                self.assertIsNone(row["error"])
+        self.assertTrue(body.closed)
+        usage_body = io.BytesIO(b"private error details")
+        row = self.fetch_codex({"available_count": 7, "credits": []},
+                               urllib.error.HTTPError(CODEX_USAGE_URL, 401, "unauthorized", {}, usage_body))[0]
+        self.assertEqual(row["error"], "http 401")
+        self.assertIsNone(row["manual_resets_available"])
+        self.assertIsNone(row["manual_reset_expirations"])
+        self.assertTrue(usage_body.closed)
+
+    def test_codex_requests_overlap_with_same_auth_and_bounded_workers(self):
+        barrier = threading.Barrier(2, timeout=2)
+        auth = json.dumps({"tokens": {"access_token": "PRIVATE", "account_id": "ACCOUNT"}})
+        request_threads = set()
+        requests = []
+        lock = threading.Lock()
+
+        def request(url, headers):
+            with lock:
+                request_threads.add(threading.get_ident())
+                requests.append((url, headers))
+            barrier.wait()
+            return self.codex_usage() if url == CODEX_USAGE_URL else {"available_count": 0, "credits": []}
+
+        with patch.object(Path, "read_text", return_value=auth), \
+                patch.object(self.usage, "http_json", side_effect=request):
+            rows = self.usage.fetch_wrapper("Codex", self.usage.codex_rows)
+        self.assertEqual(len(request_threads), 2)
+        self.assertNotIn(threading.get_ident(), request_threads)
+        self.assertEqual({url for url, headers in requests}, {CODEX_USAGE_URL, CODEX_DETAILS_URL})
+        self.assertTrue(all(headers == {"Authorization": "Bearer PRIVATE", "ChatGPT-Account-ID": "ACCOUNT", "Accept": "application/json"}
+                            for url, headers in requests))
+        self.assertIsNone(rows[0]["error"])
+        self.assertEqual(rows[0]["manual_resets_available"], 0)
+        self.assertEqual(rows[0]["manual_reset_expirations"], [])
+
+    def test_http_json_uses_get_and_existing_timeout(self):
+        for url in (CODEX_USAGE_URL, CODEX_DETAILS_URL):
+            with self.subTest(url=url), patch.object(self.usage.urllib.request, "urlopen", return_value=io.StringIO("{}")) as request:
+                self.assertEqual(self.usage.http_json(url, {"Authorization": "Bearer PRIVATE"}), {})
+                self.assertEqual(request.call_args.args[0].get_method(), "GET")
+                self.assertEqual(request.call_args.kwargs["timeout"], 30)
+
+    def test_terminal_expiry_labels_sorting_unknowns_and_passed_dates(self):
+        first, second = "2026-10-22T21:13:00Z", "2026-10-29T19:44:00Z"
+        cases = (
+            (2, [second, first], "2 · Next expiry: 22.10.26 21:13"),
+            (2, [first, first], "2 · Next expiry: 22.10.26 21:13"),
+            (3, [second, first], "3 · Earliest known expiry: 22.10.26 21:13"),
+            (1, [second, first], "1 · Earliest known expiry: 22.10.26 21:13"),
+            (2, [None, first], "2 · Earliest known expiry: 22.10.26 21:13"),
+            (None, [first], "? · Earliest known expiry: 22.10.26 21:13"),
+            (3, [], "3 · Next expiry: ?"),
+            (3, None, "3 · Next expiry: ?"),
+            (1, [None], "1 · Next expiry: ?"),
+            (0, [first], "0"),
+            (2, [second, "2026-10-12T12:00:00Z"], "2 · Next expiry: 12.10.26 12:00 (passed; refresh)"),
+        )
+        for count, dates, expected in cases:
+            with self.subTest(count=count, dates=dates), patch.object(self.usage, "datetime", FixedDateTime):
+                record = {"manual_resets_available": count, "manual_reset_expirations": dates}
+                self.assertEqual(self.usage.manual_reset_summary(record), "Manual resets available: " + expected)
+
+    def test_terminal_expirations_use_prague_daylight_saving_offsets(self):
+        with patch.dict(os.environ, TZ="Europe/Prague"), patch.object(self.usage, "datetime", FixedDateTime):
+            time.tzset()
+            for date, expected in (("2026-10-22T21:13:00Z", "22.10.26 23:13"),
+                                   ("2026-10-29T19:44:00Z", "29.10.26 20:44")):
+                with self.subTest(date=date):
+                    record = {"manual_resets_available": 1, "manual_reset_expirations": [date]}
+                    self.assertEqual(self.usage.manual_reset_summary(record), "Manual resets available: 1 · Next expiry: " + expected)
+
+    def test_terminal_summary_only_follows_final_codex_row_even_if_interleaved(self):
+        rows = []
+        for provider in ("Codex", "Cursor", "Codex", "Copilot"):
+            rows += self.usage.fetch_wrapper(provider, lambda: self.usage.row(provider, 25, "2026-10-20", 18000,
+                                                manual_resets_available=1, manual_reset_expirations=["2026-10-22T21:13:00Z"]))
+        with patch.object(self.usage, "collect_rows", return_value=rows), patch.object(self.usage, "datetime", FixedDateTime):
+            output = self.invoke([])
+        self.assertEqual(output.count("Manual resets available:"), 1)
+        lines = output.splitlines()
+        index = next(index for index, line in enumerate(lines) if "Manual resets available:" in line)
+        self.assertTrue(lines[index - 1].startswith("Codex"))
+        self.assertTrue(lines[index + 1].startswith("Copilot"))
 
     def test_copilot_calendar_months_include_leap_years_and_use_utc(self):
         cases = (
@@ -191,7 +436,7 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(rows[1]["error"], "http 401")
         self.assertEqual(rows[3]["error"], "request timed out after 30s")
         for row in (rows[1], rows[3]):
-            for key in ("used_percent", "reset_at", "window_seconds"):
+            for key in ("used_percent", "reset_at", "window_seconds", "manual_resets_available", "manual_reset_expirations"):
                 self.assertIsNone(row[key])
 
     def test_subprocess_timeouts_produce_error_rows(self):

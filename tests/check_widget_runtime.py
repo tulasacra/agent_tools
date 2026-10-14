@@ -4,6 +4,7 @@ Requires a running Wayland session and Omarchy. No real provider calls are made.
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -22,11 +23,29 @@ elif mode == "exit":
     sys.exit(7)
 else:
     row = {"provider": "codex", "label": "Codex (Gpt)", "used_percent": 12.5,
-           "reset_at": "2030-10-20T00:00:00+00:00", "window_seconds": 18000, "error": None}
+           "reset_at": "2030-10-20T00:00:00+00:00", "window_seconds": 18000,
+           "manual_resets_available": 3,
+           "manual_reset_expirations": ["2030-11-07T00:05:59Z", "2030-10-22T21:13:59.999999Z", "2030-10-29T19:44:01Z"],
+           "error": None}
     if mode == "unavailable":
-        row.update(used_percent=None, reset_at=None, window_seconds=None, error="http 401")
+        row.update(used_percent=None, reset_at=None, window_seconds=None,
+                   manual_resets_available=None, manual_reset_expirations=None, error="http 401")
     elif mode == "unknown-window":
         row["window_seconds"] = None
+    elif mode == "zero-resets":
+        row["manual_resets_available"] = 0
+        row["manual_reset_expirations"] = []
+    elif mode == "legacy":
+        del row["manual_resets_available"]
+        del row["manual_reset_expirations"]
+    elif mode == "invalid-resets":
+        row["manual_resets_available"] = "bad count"
+    elif mode == "unavailable-expirations":
+        row["manual_reset_expirations"] = None
+    elif mode == "invalid-expirations":
+        row["manual_reset_expirations"] = "bad details"
+    elif mode == "partial-expirations":
+        row["manual_reset_expirations"] = ["2030-10-22T21:13:23.818918Z", "bad date"]
     print(json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(), "rows": [row]}))
 '''
 
@@ -66,6 +85,7 @@ ShellRoot {
                 : [PYTHON, FIXTURE_PATH, value];
         }
         function action(value: string): void { harness.widget[value](); }
+        function formatExpiry(value: string): string { return harness.widget.formatResetExpiry(value, true); }
         function snapshotAge(milliseconds: string): void {
             harness.widget.updatedAt = new Date(Date.now() - Number(milliseconds)).toISOString();
         }
@@ -100,10 +120,18 @@ def main():
             raise AssertionError(f"Widget did not reach expected state: {state}")
 
         with (root / "quickshell.log").open("w+") as log:
-            process = subprocess.Popen(["quickshell", "-p", folder, "--no-color"], stdout=log, stderr=log)
+            process = subprocess.Popen(["quickshell", "-p", folder, "--no-color"], stdout=log, stderr=log,
+                                       env={**os.environ, "TZ": "Europe/Prague"})
             try:
                 initial = wait_for(lambda state: not state["busy"])
                 assert initial["starts"] == 0 and initial["rows"] == []
+                for value, expected in (
+                    ("2026-10-22T21:13:23.818Z", "22.10.26 23:13 CEST"),
+                    ("2026-10-29T19:44:01.802Z", "29.10.26 20:44 CET"),
+                    ("2026-11-07T00:05:59.667Z", "07.11.26 01:05 CET"),
+                ):
+                    assert ipc("formatExpiry", value).strip() == expected
+                print("PASS: actual widget formats expiry dates in local time across Prague's DST change")
 
                 ipc("action", "open")
                 ipc("action", "refresh")
@@ -111,6 +139,10 @@ def main():
                 ipc("action", "close")
                 good = wait_for(lambda state: not state["busy"] and state["starts"] == 1)
                 assert good["rows"][0]["used_percent"] == 12.5 and not good["error"]
+                assert good["rows"][0]["manual_resets_available"] == 3
+                assert good["rows"][0]["manual_reset_expirations"] == [
+                    "2030-10-22T21:13:59.999Z", "2030-10-29T19:44:01.000Z", "2030-11-07T00:05:59.000Z",
+                ], good["rows"][0]["manual_reset_expirations"]
                 assert not good["opened"]
                 time.sleep(1.1)
                 assert json.loads(ipc("status"))["starts"] == 1
@@ -153,6 +185,24 @@ def main():
                 assert state["rows"][0]["window_seconds"] is None
                 assert state["rows"][0]["error"] is None and not state["error"]
                 print("PASS: unknown window preserves quota data without rejecting the snapshot")
+
+                for mode, expected in (("zero-resets", 0), ("legacy", None), ("invalid-resets", None)):
+                    ipc("mode", mode)
+                    ipc("action", "refresh")
+                    state = wait_for(lambda state: not state["busy"])
+                    assert state["rows"][0]["manual_resets_available"] == expected
+                    assert state["rows"][0]["used_percent"] == 12.5 and not state["error"]
+                print("PASS: zero, legacy, and invalid reset balances preserve quota data")
+
+                for mode, expected in (("unavailable-expirations", None), ("invalid-expirations", None),
+                                       ("partial-expirations", ["2030-10-22T21:13:23.818Z", None])):
+                    ipc("mode", mode)
+                    ipc("action", "refresh")
+                    state = wait_for(lambda state: not state["busy"])
+                    assert state["rows"][0]["manual_reset_expirations"] == expected
+                    assert state["rows"][0]["manual_resets_available"] == 3
+                    assert state["rows"][0]["used_percent"] == 12.5 and not state["error"]
+                print("PASS: unavailable, malformed, and partial expiry details preserve balances and quotas")
 
                 ipc("mode", "success")
                 ipc("snapshotAge", "60000")
