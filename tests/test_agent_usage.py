@@ -151,10 +151,13 @@ class UsageTests(unittest.TestCase):
                 with patch.object(self.usage, "collect_rows", return_value=rows):
                     output = self.invoke([])
                 summary = f"  Manual resets available: {count if count is not None else '?'}"
-                if count != 0:
-                    summary += " · Next expiry: ?"
-                self.assertEqual(output.count("Manual resets available:"), 1)
                 lines = output.splitlines()
+                if count != 0:
+                    countdown_column = lines[0].index("Resets in")
+                    date_column = lines[0].index("Reset date")
+                    summary = f"{summary:<{countdown_column}}?"
+                    summary = f"{summary:<{date_column}}?"
+                self.assertEqual(output.count("Manual resets available:"), 1)
                 index = lines.index(summary)
                 self.assertTrue(lines[index - 1].startswith("Codex Week"))
                 self.assertTrue(lines[index + 1].startswith("Copilot"))
@@ -167,7 +170,10 @@ class UsageTests(unittest.TestCase):
                 del rows[0]["manual_reset_expirations"]
                 with patch.object(self.usage, "collect_rows", return_value=rows):
                     output = self.invoke([])
-                self.assertTrue(output.endswith("  Manual resets available: ? · Next expiry: ?\n"))
+                header = output.splitlines()[0]
+                summary = f"{'  Manual resets available: ?':<{header.index('Resets in')}}?"
+                summary = f"{summary:<{header.index('Reset date')}}?"
+                self.assertTrue(output.endswith(summary + "\n"))
 
     def test_codex_details_normalize_filter_and_preserve_unknown_and_duplicate_dates(self):
         available = {"status": "available", "reset_type": "codex_rate_limits"}
@@ -281,25 +287,26 @@ class UsageTests(unittest.TestCase):
                 self.assertEqual(request.call_args.args[0].get_method(), "GET")
                 self.assertEqual(request.call_args.kwargs["timeout"], 30)
 
-    def test_terminal_expiry_labels_sorting_unknowns_and_passed_dates(self):
+    def test_terminal_expiry_cells_sorting_unknowns_and_passed_dates(self):
         first, second = "2026-10-22T21:13:00Z", "2026-10-29T19:44:00Z"
         cases = (
-            (2, [second, first], "2 · Next expiry: 22.10.26 21:13"),
-            (2, [first, first], "2 · Next expiry: 22.10.26 21:13"),
-            (3, [second, first], "3 · Earliest known expiry: 22.10.26 21:13"),
-            (1, [second, first], "1 · Earliest known expiry: 22.10.26 21:13"),
-            (2, [None, first], "2 · Earliest known expiry: 22.10.26 21:13"),
-            (None, [first], "? · Earliest known expiry: 22.10.26 21:13"),
-            (3, [], "3 · Next expiry: ?"),
-            (3, None, "3 · Next expiry: ?"),
-            (1, [None], "1 · Next expiry: ?"),
-            (0, [first], "0"),
-            (2, [second, "2026-10-12T12:00:00Z"], "2 · Next expiry: 12.10.26 12:00 (passed; refresh)"),
+            (2, [second, first], "9.9 days", "22.10.26 21:13"),
+            (2, [first, first], "9.9 days", "22.10.26 21:13"),
+            (3, [second, first], "9.9 days", "22.10.26 21:13 (earliest known)"),
+            (1, [second, first], "9.9 days", "22.10.26 21:13 (earliest known)"),
+            (2, [None, first], "9.9 days", "22.10.26 21:13 (earliest known)"),
+            (None, [first], "9.9 days", "22.10.26 21:13 (earliest known)"),
+            (3, [], "?", "?"),
+            (3, None, "?", "?"),
+            (1, [None], "?", "?"),
+            (0, [first], "", ""),
+            (2, [second, "2026-10-12T12:00:00Z"], "now", "12.10.26 12:00 (passed; refresh)"),
         )
-        for count, dates, expected in cases:
+        for count, dates, countdown, expiry in cases:
             with self.subTest(count=count, dates=dates), patch.object(self.usage, "datetime", FixedDateTime):
                 record = {"manual_resets_available": count, "manual_reset_expirations": dates}
-                self.assertEqual(self.usage.manual_reset_summary(record), "Manual resets available: " + expected)
+                self.assertEqual(self.usage.manual_reset_cells(record),
+                                 (f"Manual resets available: {count if count is not None else '?'}", countdown, expiry))
 
     def test_terminal_expirations_use_prague_daylight_saving_offsets(self):
         with patch.dict(os.environ, TZ="Europe/Prague"), patch.object(self.usage, "datetime", FixedDateTime):
@@ -308,7 +315,7 @@ class UsageTests(unittest.TestCase):
                                    ("2026-10-29T19:44:00Z", "29.10.26 20:44")):
                 with self.subTest(date=date):
                     record = {"manual_resets_available": 1, "manual_reset_expirations": [date]}
-                    self.assertEqual(self.usage.manual_reset_summary(record), "Manual resets available: 1 · Next expiry: " + expected)
+                    self.assertEqual(self.usage.manual_reset_cells(record)[2], expected)
 
     def test_terminal_summary_only_follows_final_codex_row_even_if_interleaved(self):
         rows = []
@@ -401,9 +408,9 @@ class UsageTests(unittest.TestCase):
             actual = self.invoke([])
         self.assertEqual(actual, (
             "Agent            Used  Resets in     Reset date\n"
-            "-------------  ------  ------------  ----------\n"
-            "Cursor (Grok)   12.3%  7.0/ 30 days  20.10.26\n"
-            "Codex (Gpt)    100.0%  0.2/0.2 days  13.10.26\n"
+            "-------------  ------  ------------  --------------\n"
+            "Cursor (Grok)   12.3%  7.0/ 30 days  20.10.26 00:00\n"
+            "Codex (Gpt)    100.0%  0.2/0.2 days  13.10.26 05:00\n"
             "Copilot        http 401\n"
         ))
 

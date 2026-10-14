@@ -106,21 +106,24 @@ def manual_reset_details(data):
     return available, manual_reset_dates(dates)
 
 
-def manual_reset_summary(record):
+def manual_reset_cells(record):
     count = manual_reset_count(record.get("manual_resets_available"))
-    summary = f"Manual resets available: {count if count is not None else '?'}"
+    balance = f"Manual resets available: {count if count is not None else '?'}"
     if count == 0:
-        return summary
+        return balance, "", ""
     dates = manual_reset_dates(record.get("manual_reset_expirations"))
     if not dates or dates[0] is None:
-        return summary + " · Next expiry: ?"
+        return balance, "?", "?"
     incomplete = count is None or len(dates) != count or None in dates
-    label = "Earliest known expiry" if incomplete else "Next expiry"
     earliest = local_dt(dates[0])
-    summary += f" · {label}: {earliest.strftime('%d.%m.%y %H:%M')}"
-    if earliest <= datetime.now().astimezone():
-        summary += " (passed; refresh)"
-    return summary
+    seconds = (earliest - datetime.now().astimezone()).total_seconds()
+    countdown = "now" if seconds <= 0 else f"{seconds / 86400:.1f} days"
+    expiry = earliest.strftime("%d.%m.%y %H:%M")
+    if incomplete:
+        expiry += " (earliest known)"
+    if seconds <= 0:
+        expiry += " (passed; refresh)"
+    return balance, countdown, expiry
 
 
 def row(label, percent, reset_at, window_seconds, *, manual_resets_available=None,
@@ -160,13 +163,14 @@ def fail(label, message):
 def print_table(rows):
     entries = []
     last_codex = max((index for index, record in enumerate(rows) if record["provider"] == "codex"), default=-1)
+    reset_cells = manual_reset_cells(rows[last_codex]) if last_codex >= 0 else None
     for record in rows:
         if record["error"] is not None:
             entries.append((record["label"], record["error"]))
             continue
         when = local_dt(record["reset_at"])
         left, period, unit = remaining(when, record["window_seconds"])
-        date = f"{when.day:02d}.{when.month:02d}.{when.year % 100:02d}"
+        date = when.strftime("%d.%m.%y %H:%M")
         entries.append((record["label"], f"{record['used_percent']:.1f}%", left, period, unit, date))
 
     agent_w = len("Agent")
@@ -185,12 +189,17 @@ def print_table(rows):
         unit_w = max(unit_w, len(entry[4]))
         date_w = max(date_w, len(entry[5]))
 
+    if reset_cells is not None:
+        agent_w = max(agent_w, len(reset_cells[0]) - used_w)
+
     left_w = num_w
     if period_w:
         left_w += 1 + period_w
     if unit_w:
         left_w += 1 + unit_w
     left_w = max(left_w, len("Resets in"))
+    if reset_cells is not None:
+        left_w = max(left_w, len(reset_cells[1]))
 
     def left_cell(number, period, unit):
         text = f"{number:>{num_w}}" if num_w else ""
@@ -227,7 +236,11 @@ def print_table(rows):
                 f"{date:<{date_w}}".rstrip()
             )
         if index == last_codex:
-            print(f"  {manual_reset_summary(record)}")
+            balance, countdown, expiry = reset_cells
+            balance_w = agent_w + used_w
+            if countdown.endswith(" days"):
+                countdown = countdown.rjust(left_w)
+            print(f"  {balance:<{balance_w}}  {countdown:<{left_w}}  {expiry}".rstrip())
 
 
 def cursor_rows():

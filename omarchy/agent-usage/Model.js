@@ -50,19 +50,24 @@ function parseSnapshot(text) {
 
 function manualResetSummary(rows, index, nowMs, formatDate) {
     var row = rows[index];
-    if (!row || row.provider !== "codex") return "";
+    if (!row || row.provider !== "codex") return null;
     for (var next = index + 1; next < rows.length; next++) {
-        if (rows[next].provider === "codex") return "";
+        if (rows[next].provider === "codex") return null;
     }
     var count = row.manual_resets_available;
     var summary = "Manual resets available: " + (count == null ? "—" : count);
-    if (count === 0) return summary;
+    if (count === 0) return {label: summary, remaining: "", date: ""};
     var dates = row.manual_reset_expirations;
     var first = dates && dates.length > 0 ? dates[0] : null;
-    if (first === null) return summary + " · Next expiry: —";
+    if (first === null) return {label: summary, remaining: "—", date: "—"};
     var complete = count != null && dates.length === count && dates.indexOf(null) < 0;
-    return summary + (complete ? " · Next expiry: " : " · Earliest known expiry: ")
-        + formatDate(first, false) + (Date.parse(first) <= nowMs ? " (passed; refresh)" : "");
+    var passed = Date.parse(first) <= nowMs;
+    return {
+        label: summary,
+        remaining: countdown(first, nowMs),
+        date: formatDate(first, false) + (complete ? "" : " (earliest known)")
+            + (passed ? " (passed; refresh)" : "")
+    };
 }
 
 function manualResetTooltip(row, nowMs, formatDate) {

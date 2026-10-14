@@ -25,8 +25,9 @@ are reported in the data, with exit status 0, so partial results remain usable.
 HTTP requests and subprocess calls have 30-second timeouts.
 
 Codex's **Manual resets available** balance appears once beneath its quota rows
-in the terminal and popup, followed by the next expiration in local time:
-`Manual resets available: 3 · Next expiry: 22.10.26 23:13`.
+in the terminal and popup. The **Resets in** column shows time until the next
+expiration (`8.9 days` in the terminal, `8d 21h` in the popup), and **Reset date**
+shows its local date and time. All terminal reset dates include hours and minutes.
 Hover over the popup summary to see all returned expiration dates, earliest
 first, with timezone abbreviations. A zero balance omits the expiration.
 
@@ -35,7 +36,7 @@ the same 30-second timeout. The balance uses the details response's valid
 `available_count`, falling back to `rate_limit_reset_credits.available_count`
 from usage, independently of `applicable_available_count`. The number of
 returned detail entries never replaces the balance; the service may cap them.
-If only some dates are known, the summary says **Earliest known expiry** and
+If only some dates are known, the date is marked **earliest known** and
 the popup tooltip explains the missing details. Passed dates say **passed;
 refresh**; the cached balance stays unchanged until refreshed.
 

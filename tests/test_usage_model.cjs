@@ -7,6 +7,11 @@ const vm = require('node:vm');
 const model = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../omarchy/agent-usage/Model.js'), 'utf8'), model);
 
+function resetSummaryText(...args) {
+  const summary = model.manualResetSummary(...args);
+  return summary ? summary.label + (summary.date ? ' ' + summary.date : '') : '';
+}
+
 function snapshot() {
   return {
     generated_at: '2026-10-13T00:00:00+00:00',
@@ -48,8 +53,8 @@ test('manual reset balances preserve zero and normalize missing or invalid value
     assert.equal(parsed.rows[0].error, null);
     assert.equal(parsed.rows[1].manual_resets_available, null);
     assert.equal(parsed.rows[0].manual_reset_expirations, null);
-    assert.equal(model.manualResetSummary(parsed.rows, 0),
-      `Manual resets available: ${expected === null ? '—' : expected}${expected === 0 ? '' : ' · Next expiry: —'}`);
+    assert.equal(resetSummaryText(parsed.rows, 0),
+      `Manual resets available: ${expected === null ? '—' : expected}${expected === 0 ? '' : ' —'}`);
   }
 });
 
@@ -58,11 +63,11 @@ test('manual reset summary appears once after the final Codex window only', () =
   data.rows[0].manual_resets_available = 3;
   data.rows.splice(1, 0, {...data.rows[0], window_seconds: 604800});
   const {rows} = model.parseSnapshot(JSON.stringify(data));
-  assert.equal(model.manualResetSummary(rows, 0), '');
-  assert.equal(model.manualResetSummary(rows, 1), 'Manual resets available: 3 · Next expiry: —');
-  assert.equal(model.manualResetSummary(rows, 2), '');
+  assert.equal(resetSummaryText(rows, 0), '');
+  assert.equal(resetSummaryText(rows, 1), 'Manual resets available: 3 —');
+  assert.equal(resetSummaryText(rows, 2), '');
   rows.pop(); // The final provider also gets its summary.
-  assert.equal(model.manualResetSummary(rows, 1), 'Manual resets available: 3 · Next expiry: —');
+  assert.equal(resetSummaryText(rows, 1), 'Manual resets available: 3 —');
 });
 
 test('unavailable Codex balances stay unknown alongside the provider error', () => {
@@ -70,7 +75,7 @@ test('unavailable Codex balances stay unknown alongside the provider error', () 
   data.rows = [{...data.rows[1], provider: 'codex', label: 'Codex', manual_resets_available: null}];
   const parsed = model.parseSnapshot(JSON.stringify(data));
   assert.equal(parsed.rows[0].error, 'http 401');
-  assert.equal(model.manualResetSummary(parsed.rows, 0), 'Manual resets available: — · Next expiry: —');
+  assert.equal(resetSummaryText(parsed.rows, 0), 'Manual resets available: — —');
 });
 
 const earlyExpiry = '2026-10-22T21:13:23.818Z';
@@ -88,8 +93,8 @@ function withExpirations(count, expirations) {
 test('expiration details normalize offsets, sort by instant, and preserve duplicates and unknowns', () => {
   const rows = withExpirations(4, [lateExpiry, null, '2026-10-22T23:13:23.818918+02:00', earlyExpiry]);
   assert.deepEqual(Array.from(rows[0].manual_reset_expirations), [earlyExpiry, earlyExpiry, lateExpiry, null]);
-  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
-    `Manual resets available: 4 · Earliest known expiry: ${earlyExpiry}`);
+  assert.equal(resetSummaryText(rows, 0, expiryNow, formatExpiry),
+    `Manual resets available: 4 ${earlyExpiry} (earliest known)`);
   assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry), [
     'Reset expirations (local time)', `${earlyExpiry} (local zone)`, `${earlyExpiry} (local zone)`,
     `${lateExpiry} (local zone)`, 'Expiration unknown',
@@ -98,17 +103,18 @@ test('expiration details normalize offsets, sort by instant, and preserve duplic
 
 test('complete expiry details show the soonest date inline and all dates in the tooltip', () => {
   const rows = withExpirations(2, [lateExpiry, earlyExpiry]);
-  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
-    `Manual resets available: 2 · Next expiry: ${earlyExpiry}`);
+  assert.deepEqual({...model.manualResetSummary(rows, 0, expiryNow, formatExpiry)}, {
+    label: 'Manual resets available: 2', remaining: '8d 21h', date: earlyExpiry,
+  });
   assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry),
     `Reset expirations (local time)\n${earlyExpiry} (local zone)\n${lateExpiry} (local zone)`);
   rows.splice(1, 0, {...rows[0], window_seconds: 604800});
-  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), '');
-  assert.match(model.manualResetSummary(rows, 1, expiryNow, formatExpiry), /Next expiry:/);
+  assert.equal(resetSummaryText(rows, 0, expiryNow, formatExpiry), '');
+  assert.equal(model.manualResetSummary(rows, 1, expiryNow, formatExpiry).date, earlyExpiry);
   rows.splice(1, 0, {...rows[0], provider: 'cursor'});
-  assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), '');
-  assert.equal(model.manualResetSummary(rows, 1, expiryNow, formatExpiry), '');
-  assert.match(model.manualResetSummary(rows, 2, expiryNow, formatExpiry), /Next expiry:/);
+  assert.equal(resetSummaryText(rows, 0, expiryNow, formatExpiry), '');
+  assert.equal(resetSummaryText(rows, 1, expiryNow, formatExpiry), '');
+  assert.equal(model.manualResetSummary(rows, 2, expiryNow, formatExpiry).date, earlyExpiry);
 });
 
 test('sub-millisecond expiry precision cannot round into the following minute', () => {
@@ -123,7 +129,7 @@ test('partial or mismatched expiry details never claim to establish the next exp
     [null, [lateExpiry], 'Total reset count unavailable.'],
   ]) {
     const rows = withExpirations(count, dates);
-    assert.match(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), /Earliest known expiry:/);
+    assert.match(resetSummaryText(rows, 0, expiryNow, formatExpiry), /\(earliest known\)$/);
     assert.ok(model.manualResetTooltip(rows[0], expiryNow, formatExpiry).endsWith(note));
   }
 });
@@ -134,13 +140,13 @@ test('missing and malformed optional details keep the balance and quotas usable'
     assert.equal(rows[0].manual_reset_expirations, null);
     assert.equal(rows[0].manual_resets_available, 3);
     assert.equal(rows[0].used_percent, 0);
-    assert.equal(model.manualResetSummary(rows, 0, expiryNow, formatExpiry),
-      'Manual resets available: 3 · Next expiry: —');
+    assert.equal(resetSummaryText(rows, 0, expiryNow, formatExpiry),
+      'Manual resets available: 3 —');
     assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry), 'Expiration details unavailable.');
   }
   const rows = withExpirations(7, [null, 'bad', '3', 123, false, {}, '2026-10-22T99:00:00Z']);
   assert.deepEqual(Array.from(rows[0].manual_reset_expirations), Array(7).fill(null));
-  assert.match(model.manualResetSummary(rows, 0, expiryNow, formatExpiry), /Next expiry: —$/);
+  assert.match(resetSummaryText(rows, 0, expiryNow, formatExpiry), / —$/);
   assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry).split('Expiration unknown').length - 1, 7);
   const empty = withExpirations(3, []);
   assert.match(model.manualResetTooltip(empty[0], expiryNow, formatExpiry), /Details returned for 0 of 3/);
@@ -148,11 +154,13 @@ test('missing and malformed optional details keep the balance and quotas usable'
 
 test('zero balances hide expirations and passed cached dates request refresh without changing the balance', () => {
   const zero = withExpirations(0, [earlyExpiry]);
-  assert.equal(model.manualResetSummary(zero, 0, expiryNow, formatExpiry), 'Manual resets available: 0');
+  assert.equal(resetSummaryText(zero, 0, expiryNow, formatExpiry), 'Manual resets available: 0');
   assert.equal(model.manualResetTooltip(zero[0], expiryNow, formatExpiry), '');
+  assert.equal(model.manualResetSummary(zero, 0, expiryNow, formatExpiry).remaining, '');
   const rows = withExpirations(2, [earlyExpiry, lateExpiry]);
   const passed = Date.parse(earlyExpiry);
-  assert.match(model.manualResetSummary(rows, 0, passed, formatExpiry), / \(passed; refresh\)$/);
+  assert.match(resetSummaryText(rows, 0, passed, formatExpiry), / \(passed; refresh\)$/);
+  assert.equal(model.manualResetSummary(rows, 0, passed, formatExpiry).remaining, 'now');
   assert.equal(model.manualResetTooltip(rows[0], passed, formatExpiry).split('(passed; refresh)').length - 1, 1);
   assert.equal(rows[0].manual_resets_available, 2);
   assert.equal(rows[0].manual_reset_expirations.length, 2);

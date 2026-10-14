@@ -154,6 +154,8 @@ Panel {
                     readonly property real nameWidth: tableWidth * 0.55
                     readonly property real usedWidth: tableWidth * 0.18
                     readonly property real countdownWidth: tableWidth * 0.27
+                    readonly property real countdownOffset: nameWidth + usedWidth + columnSpace * 2
+                    readonly property real dateOffset: countdownOffset + countdownWidth + columnSpace
                     readonly property real dateWidth: Math.ceil(dateMetrics.advanceWidth)
                     readonly property real windowWidth: Math.ceil(windowMetrics.advanceWidth)
 
@@ -240,7 +242,7 @@ Panel {
                             required property int index
                             readonly property bool failed: modelData.error !== null
                             readonly property var pace: Model.usagePace(modelData, root.updatedAt, root.nowMs)
-                            readonly property string resetSummary: Model.manualResetSummary(root.rows, index, root.nowMs, root.formatResetExpiry)
+                            readonly property var resetSummary: Model.manualResetSummary(root.rows, index, root.nowMs, root.formatResetExpiry)
                             readonly property string resetTooltip: Model.manualResetTooltip(modelData, root.nowMs, root.formatResetExpiry)
                             width: content.width
                             spacing: Style.space(4)
@@ -294,14 +296,38 @@ Panel {
                                 wrapMode: Text.Wrap
                                 elide: Text.ElideNone
                             }
-                            Cell {
-                                visible: quota.resetSummary !== ""
+                            Item {
+                                visible: quota.resetSummary !== null
                                 width: parent.width
-                                text: quota.resetSummary
-                                color: root.muted
-                                font.pixelSize: Style.font.bodySmall
-                                wrapMode: Text.Wrap
-                                elide: Text.ElideNone
+                                implicitHeight: Math.max(resetLabel.implicitHeight, resetRemaining.implicitHeight,
+                                                         resetDate.implicitHeight)
+
+                                Cell {
+                                    id: resetLabel
+                                    width: content.countdownOffset - content.columnSpace
+                                    text: quota.resetSummary ? quota.resetSummary.label : ""
+                                    color: root.muted
+                                    wrapMode: Text.Wrap
+                                    elide: Text.ElideNone
+                                }
+                                Cell {
+                                    id: resetRemaining
+                                    x: content.countdownOffset
+                                    width: content.countdownWidth
+                                    text: quota.resetSummary ? quota.resetSummary.remaining : ""
+                                    color: root.muted
+                                    wrapMode: Text.Wrap
+                                    elide: Text.ElideNone
+                                }
+                                Cell {
+                                    id: resetDate
+                                    x: content.dateOffset
+                                    width: parent.width - x
+                                    text: quota.resetSummary ? quota.resetSummary.date : ""
+                                    color: root.muted
+                                    wrapMode: Text.Wrap
+                                    elide: Text.ElideNone
+                                }
 
                                 MouseArea {
                                     id: resetHover
