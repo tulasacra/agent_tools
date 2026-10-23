@@ -372,16 +372,20 @@ class UsageTests(unittest.TestCase):
                 self.assertEqual(datetime.fromisoformat(rows[0]["reset_at"]), self.usage.local_dt(reset))
 
     def test_antigravity_only_uses_explicit_known_periods(self):
-        output = "\n".join(
-            f"Gemini Models\t{kind}\t75%\t2026-10-20T00:00:00Z"
-            for kind in ("Weekly Limit Remaining", "Five Hour Limit Remaining", "Limit Remaining", "Monthly Limit Remaining")
-        )
+        output = "\n".join([
+            *(
+                f"Gemini Models\t{kind}\t75%\t2026-10-20T00:00:00Z"
+                for kind in ("Weekly Limit Remaining", "Five Hour Limit Remaining", "Limit Remaining", "Monthly Limit Remaining")
+            ),
+            "Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t75%\t2026-10-20T00:00:00Z",
+        ])
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=output)):
             rows = self.usage.fetch_wrapper("Antigravity", self.usage.antigravity_rows)
-        self.assertEqual([r["window_seconds"] for r in rows], [604800, 18000, None, None])
+        self.assertEqual([r["window_seconds"] for r in rows], [604800, 18000, None, None, 604800])
         self.assertEqual([r["label"] for r in rows], [
             "Antigravity (Gemini Week)", "Antigravity (Gemini 5h)",
             "Antigravity (Gemini unknown)", "Antigravity (Gemini Monthly)",
+            "Antigravity (Argon Week)",
         ])
         self.assertTrue(all(r["used_percent"] == 25 and r["error"] is None for r in rows))
 

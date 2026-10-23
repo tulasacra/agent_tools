@@ -376,21 +376,23 @@ def antigravity_rows():
         parts = line.split("\t")
         if len(parts) < 4:
             continue
-        kind = parts[1].strip()
-        if not kind.endswith("Limit Remaining"):
+        group = parts[0].strip()
+        kind = parts[1].strip().removesuffix(" Remaining")
+        if not kind.endswith("Limit"):
             continue
+        kind = kind.removeprefix(group).strip()
         try:
             percent_str = "".join(c for c in parts[2] if c.isdigit() or c == ".")
             percent = 100.0 - float(percent_str)
         except ValueError:
             continue
-        model = "Gemini" if "Gemini" in parts[0] else "*"
+        model = "Argon" if "Argon" in group else "Gemini" if "Gemini" in group else "*"
         # /usage names both windows explicitly. New or unspecified periods
         # must not silently turn into a five-hour window.
         period, window = {
-            "Weekly Limit Remaining": ("Week", 7 * 86400),
-            "Five Hour Limit Remaining": ("5h", 5 * 3600),
-        }.get(kind, (kind.removesuffix("Limit Remaining").strip() or "unknown", None))
+            "Weekly Limit": ("Week", 7 * 86400),
+            "Five Hour Limit": ("5h", 5 * 3600),
+        }.get(kind, (kind.removesuffix("Limit").strip() or "unknown", None))
         date_str = parts[3].strip()
         row(f"Antigravity ({model} {period})", percent, date_str, window)
         shown = True
