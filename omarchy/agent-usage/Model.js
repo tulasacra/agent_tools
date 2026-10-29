@@ -103,7 +103,8 @@ function countdownDuration(seconds) {
     var hours = Math.floor(minutes / 60) % 24;
     var mins = minutes % 60;
     if (days > 0) return days + "d " + hours + "h " + mins + "m";
-    return hours + "h " + mins + "m";
+    if (hours > 0) return hours + "h " + mins + "m";
+    return mins + "m";
 }
 
 function countdown(resetAt, nowMs) {

@@ -192,10 +192,10 @@ test('distinguishes short and long windows and counts down to now', () => {
   assert.equal(model.countdown('2026-10-13T05:00:00Z', now), '5h 0m');
   assert.equal(model.countdown('2026-10-13T02:00:00+02:00', now), 'now');
   assert.equal(model.countdown('2026-10-12T00:00:00Z', now), 'now');
-  assert.equal(model.countdown('2026-10-13T00:00:01Z', now), '0h 1m');
+  assert.equal(model.countdown('2026-10-13T00:00:01Z', now), '1m');
 });
 
-test('countdown always formats as either d h m or h m', () => {
+test('countdown formats as d h m, h m, or just m when d and h are 0', () => {
   assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600 + 43 * 60), '8d 7h 43m');
   assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600), '8d 7h 0m');
   assert.equal(model.countdownDuration(2 * 86400 + 15 * 60), '2d 0h 15m');
@@ -203,9 +203,9 @@ test('countdown always formats as either d h m or h m', () => {
   assert.equal(model.countdownDuration(21 * 3600 + 43 * 60), '21h 43m');
   assert.equal(model.countdownDuration(4 * 3600 + 32 * 60), '4h 32m');
   assert.equal(model.countdownDuration(4 * 3600), '4h 0m');
-  assert.equal(model.countdownDuration(45 * 60), '0h 45m');
-  assert.equal(model.countdownDuration(60), '0h 1m');
-  assert.equal(model.countdownDuration(1), '0h 1m');
+  assert.equal(model.countdownDuration(45 * 60), '45m');
+  assert.equal(model.countdownDuration(60), '1m');
+  assert.equal(model.countdownDuration(1), '1m');
 });
 
 function paceAt(elapsedFraction, usedPercent, nowOffset = 0) {
