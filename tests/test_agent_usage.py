@@ -389,6 +389,53 @@ class UsageTests(unittest.TestCase):
         ])
         self.assertTrue(all(r["used_percent"] == 25 and r["error"] is None for r in rows))
 
+    def test_antigravity_structured_json_distinguishes_started_and_unstarted_timers(self):
+        payload = json.dumps({
+            "command": {
+                "name": "usage",
+                "data": {
+                    "groups": [
+                        {
+                            "name": "Gemini Models",
+                            "buckets": [
+                                {
+                                    "id": "gemini-weekly",
+                                    "name": "Weekly Limit Remaining",
+                                    "window": "weekly",
+                                    "remaining_fraction": 0.995,
+                                    "reset_time": "2026-10-20T00:00:00Z",
+                                    "description": "You have used some of your weekly limit",
+                                },
+                            ],
+                        },
+                        {
+                            "name": "Claude and GPT models",
+                            "buckets": [
+                                {
+                                    "id": "3p-5h",
+                                    "name": "Five Hour Limit Remaining",
+                                    "window": "5h",
+                                    "remaining_fraction": 1,
+                                    "reset_time": "2026-10-13T05:00:00Z",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        })
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=payload)):
+            rows = self.usage.fetch_wrapper("Antigravity", self.usage.antigravity_rows)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["label"], "Antigravity (Gemini Week)")
+        self.assertAlmostEqual(rows[0]["used_percent"], 0.5)
+        self.assertEqual(rows[0]["reset_at"], "2026-10-20T00:00:00+00:00")
+        self.assertEqual(rows[0]["window_seconds"], 7 * 86400)
+        self.assertEqual(rows[1]["label"], "Antigravity (* 5h)")
+        self.assertEqual(rows[1]["used_percent"], 0.0)
+        self.assertIsNone(rows[1]["reset_at"])
+        self.assertEqual(rows[1]["window_seconds"], 5 * 3600)
+
     def test_unknown_window_retains_usage_and_countdown_in_both_formats(self):
         rows = self.usage.fetch_wrapper("Test", lambda: self.usage.row("Unknown", 25, "2026-10-20", None))
         with patch.object(self.usage, "collect_rows", return_value=rows), patch.object(self.usage, "datetime", FixedDateTime):
@@ -416,6 +463,21 @@ class UsageTests(unittest.TestCase):
             "Cursor (Grok)   12.3%  7.0/ 30 days  20.10.26 00:00\n"
             "Codex (Gpt)    100.0%  0.2/0.2 days  13.10.26 05:00\n"
             "Copilot        http 401\n"
+        ))
+
+    def test_terminal_table_unstarted_timer_shows_dashes(self):
+        def fixture():
+            self.usage.row("Antigravity (* 5h)", 0, None, 5 * 3600)
+            self.usage.row("Cursor (Grok)", 10, "2026-10-20T00:00:00Z", 30 * 86400)
+
+        rows = self.usage.fetch_wrapper("Test", fixture)
+        with patch.object(self.usage, "collect_rows", return_value=rows), patch.object(self.usage, "datetime", FixedDateTime):
+            actual = self.invoke([])
+        self.assertEqual(actual, (
+            "Agent                Used  Resets in    Reset date\n"
+            "------------------  -----  -----------  --------------\n"
+            "Antigravity (* 5h)   0.0%  —            —\n"
+            "Cursor (Grok)       10.0%  7.0/30 days  20.10.26 00:00\n"
         ))
 
     def test_reset_timestamp_formats_and_timezone(self):

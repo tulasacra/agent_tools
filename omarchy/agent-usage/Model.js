@@ -22,8 +22,8 @@ function parseSnapshot(text) {
                 || !isFinite(row.used_percent) || row.used_percent < 0
                 || (row.window_seconds !== null && (typeof row.window_seconds !== "number"
                     || !isFinite(row.window_seconds) || row.window_seconds <= 0))
-                || typeof row.reset_at !== "string"
-                || !isFinite(Date.parse(row.reset_at))) {
+                || (row.reset_at !== null && (typeof row.reset_at !== "string"
+                    || !isFinite(Date.parse(row.reset_at))))) {
             throw new Error("au returned an invalid quota row.");
         }
         // Older snapshots and malformed optional balances keep valid quotas usable.
@@ -117,6 +117,8 @@ function usagePace(row, generatedAt, nowMs) {
     if (!row || row.error !== null || typeof row.used_percent !== "number"
             || !isFinite(row.used_percent) || row.used_percent < 0)
         return unknown;
+    if (row.reset_at === null)
+        return {level: "normal", hint: "Reset timer has not started."};
 
     var observedMs = Date.parse(generatedAt);
     var resetMs = Date.parse(row.reset_at);

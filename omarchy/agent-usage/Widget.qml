@@ -275,11 +275,13 @@ Panel {
                                 }
                                 Cell {
                                     width: content.countdownWidth
-                                    text: quota.failed ? "—" : Model.countdown(quota.modelData.reset_at, root.nowMs)
+                                    text: quota.failed || quota.modelData.reset_at === null
+                                        ? "—" : Model.countdown(quota.modelData.reset_at, root.nowMs)
                                 }
                                 Cell {
                                     width: content.dateWidth
-                                    text: quota.failed ? "—" : Qt.formatDateTime(new Date(quota.modelData.reset_at), "dd.MM.yy HH:mm")
+                                    text: quota.failed || quota.modelData.reset_at === null
+                                        ? "—" : Qt.formatDateTime(new Date(quota.modelData.reset_at), "dd.MM.yy HH:mm")
                                 }
                                 Cell {
                                     width: content.windowWidth

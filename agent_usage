@@ -139,7 +139,7 @@ def row(label, percent, reset_at, window_seconds, *, manual_resets_available=Non
         "provider": tls.provider,
         "label": label,
         "used_percent": percent,
-        "reset_at": local_dt(reset_at).astimezone(timezone.utc).isoformat(),
+        "reset_at": local_dt(reset_at).astimezone(timezone.utc).isoformat() if reset_at is not None else None,
         "window_seconds": window_seconds,
         "manual_resets_available": manual_reset_count(manual_resets_available),
         "manual_reset_expirations": manual_reset_dates(manual_reset_expirations),
@@ -168,6 +168,9 @@ def print_table(rows):
         if record["error"] is not None:
             entries.append((record["label"], record["error"]))
             continue
+        if record["reset_at"] is None:
+            entries.append((record["label"], f"{record['used_percent']:.1f}%", "—", "", "", "—"))
+            continue
         when = local_dt(record["reset_at"])
         left, period, unit = remaining(when, record["window_seconds"])
         date = when.strftime("%d.%m.%y %H:%M")
@@ -184,7 +187,8 @@ def print_table(rows):
         if len(entry) == 2:
             continue
         used_w = max(used_w, len(entry[1]))
-        num_w = max(num_w, len(entry[2]))
+        if entry[2] != "—":
+            num_w = max(num_w, len(entry[2]))
         period_w = max(period_w, len(entry[3]))
         unit_w = max(unit_w, len(entry[4]))
         date_w = max(date_w, len(entry[5]))
@@ -202,6 +206,8 @@ def print_table(rows):
         left_w = max(left_w, len(reset_cells[1]))
 
     def left_cell(number, period, unit):
+        if number == "—":
+            return f"{number:<{left_w}}"
         text = f"{number:>{num_w}}" if num_w else ""
         if period_w:
             if period:
@@ -363,7 +369,7 @@ def codex_rows():
 def antigravity_rows():
     try:
         out = subprocess.run(
-            ["agy", "--new-project", "--print", "/usage"],
+            ["agy", "--new-project", "--output-format", "json", "-p", "/usage"],
             check=True,
             capture_output=True,
             text=True,
@@ -372,30 +378,61 @@ def antigravity_rows():
     except (OSError, subprocess.CalledProcessError):
         out = ""
     shown = False
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 4:
-            continue
-        group = parts[0].strip()
-        kind = parts[1].strip().removesuffix(" Remaining")
-        if not kind.endswith("Limit"):
-            continue
-        kind = kind.removeprefix(group).strip()
-        try:
-            percent_str = "".join(c for c in parts[2] if c.isdigit() or c == ".")
-            percent = 100.0 - float(percent_str)
-        except ValueError:
-            continue
-        model = "Argon" if "Argon" in group else "Gemini" if "Gemini" in group else "*"
-        # /usage names both windows explicitly. New or unspecified periods
-        # must not silently turn into a five-hour window.
-        period, window = {
-            "Weekly Limit": ("Week", 7 * 86400),
-            "Five Hour Limit": ("5h", 5 * 3600),
-        }.get(kind, (kind.removesuffix("Limit").strip() or "unknown", None))
-        date_str = parts[3].strip()
-        row(f"Antigravity ({model} {period})", percent, date_str, window)
-        shown = True
+    try:
+        data = json.loads(out)
+        groups = data.get("command", {}).get("data", {}).get("groups", [])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        groups = []
+
+    if groups:
+        for group in groups:
+            group_name = group.get("name", "")
+            model = "Argon" if "Argon" in group_name else "Gemini" if "Gemini" in group_name else "*"
+            for bucket in group.get("buckets", []):
+                window_kind = bucket.get("window", "")
+                name = bucket.get("name", "")
+                period, window = {
+                    "weekly": ("Week", 7 * 86400),
+                    "5h": ("5h", 5 * 3600),
+                }.get(window_kind, (
+                    "Week" if "Weekly" in name else "5h" if "Five Hour" in name else window_kind or "unknown",
+                    7 * 86400 if "Weekly" in name else 5 * 3600 if "Five Hour" in name else None,
+                ))
+                remaining_fraction = bucket.get("remaining_fraction")
+                if remaining_fraction is not None:
+                    percent = max(0.0, (1.0 - float(remaining_fraction)) * 100.0)
+                    timer_started = float(remaining_fraction) < 1.0 or bool(bucket.get("description"))
+                else:
+                    percent = 0.0
+                    timer_started = False
+                reset_at = bucket.get("reset_time") if timer_started else None
+                row(f"Antigravity ({model} {period})", percent, reset_at, window)
+                shown = True
+    else:
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            group = parts[0].strip()
+            kind = parts[1].strip().removesuffix(" Remaining")
+            if not kind.endswith("Limit"):
+                continue
+            kind = kind.removeprefix(group).strip()
+            try:
+                percent_str = "".join(c for c in parts[2] if c.isdigit() or c == ".")
+                percent = 100.0 - float(percent_str)
+            except ValueError:
+                continue
+            model = "Argon" if "Argon" in group else "Gemini" if "Gemini" in group else "*"
+            # /usage names both windows explicitly. New or unspecified periods
+            # must not silently turn into a five-hour window.
+            period, window = {
+                "Weekly Limit": ("Week", 7 * 86400),
+                "Five Hour Limit": ("5h", 5 * 3600),
+            }.get(kind, (kind.removesuffix("Limit").strip() or "unknown", None))
+            reset_at = None if percent <= 0.0 else parts[3].strip()
+            row(f"Antigravity ({model} {period})", percent, reset_at, window)
+            shown = True
     if not shown:
         raise RuntimeError("usage response has no limits")
 

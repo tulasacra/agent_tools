@@ -42,6 +42,18 @@ test('accepts an explicitly unknown window while retaining quota and reset data'
   assert.equal(row.error, null);
 });
 
+test('accepts null reset_at when reset timer has not started', () => {
+  const data = snapshot();
+  data.rows[0].reset_at = null;
+  const row = model.parseSnapshot(JSON.stringify(data)).rows[0];
+  assert.equal(row.reset_at, null);
+  assert.equal(row.used_percent, 0);
+  assert.equal(row.error, null);
+  const pace = model.usagePace(row, data.generated_at, Date.parse(data.generated_at));
+  assert.equal(pace.level, 'normal');
+  assert.equal(pace.hint, 'Reset timer has not started.');
+});
+
 test('manual reset balances preserve zero and normalize missing or invalid values to unknown', () => {
   for (const value of [3, 0, undefined, null, -1, 1.5, '3', true, false, [], {}, Infinity, NaN]) {
     const data = snapshot();
