@@ -54,13 +54,28 @@ import Quickshell
 import Quickshell.Io
 ShellRoot {
     id: harness
+    property var component: null
     property var widget: null
     property var process: null
+    property string currentMode: "success"
     property int starts: 0
+    property int generation: 0
     Item { id: host }
-    Component.onCompleted: Qt.callLater(function() {
-        var component = Qt.createComponent(PLUGIN_URL);
-        if (component.status !== Component.Ready) { console.error(component.errorString()); return; }
+    function commandForMode(value) {
+        return value === "missing" ? ["/nonexistent/au-runtime-test"]
+            : value === "deadline" ? ["/usr/bin/timeout", "--kill-after=0.2", "0.05", PYTHON, FIXTURE_PATH, "success"]
+            : [PYTHON, FIXTURE_PATH, value];
+    }
+    function mountWidget() {
+        if (widget) {
+            widget.destroy();
+            widget = null;
+            process = null;
+        }
+        if (!component) {
+            component = Qt.createComponent(PLUGIN_URL);
+            if (component.status !== Component.Ready) { console.error(component.errorString()); return; }
+        }
         widget = component.createObject(host);
         for (var i = 0; i < widget.data.length; i++) {
             var obj = widget.data[i];
@@ -69,21 +84,24 @@ ShellRoot {
             if (obj.anchorItem !== undefined) obj.visible = false;
         }
         process.started.connect(function() { harness.starts++; });
-        process.command = [PYTHON, FIXTURE_PATH, "success"];
-    })
+        process.command = commandForMode(currentMode);
+        generation++;
+    }
+    Component.onCompleted: Qt.callLater(mountWidget)
     IpcHandler {
         target: "au-test"
         function status(): string {
             if (!harness.widget || !harness.process) return '{}';
             var w = harness.widget;
             return JSON.stringify({ready: true, busy: w.busy, rows: w.rows,
-                updatedAt: w.updatedAt, error: w.refreshError, opened: w.opened, starts: harness.starts});
+                updatedAt: w.updatedAt, error: w.refreshError, opened: w.opened,
+                starts: harness.starts, generation: harness.generation});
         }
         function mode(value: string): void {
-            harness.process.command = value === "missing" ? ["/nonexistent/au-runtime-test"]
-                : value === "deadline" ? ["/usr/bin/timeout", "--kill-after=0.2", "0.05", PYTHON, FIXTURE_PATH, "success"]
-                : [PYTHON, FIXTURE_PATH, value];
+            harness.currentMode = value;
+            if (harness.process) harness.process.command = harness.commandForMode(value);
         }
+        function recreate(): void { harness.mountWidget(); }
         function action(value: string): void { harness.widget[value](); }
         function formatExpiry(value: string): string { return harness.widget.formatResetExpiry(value, true); }
         function snapshotAge(milliseconds: string): void {
@@ -120,8 +138,10 @@ def main():
             raise AssertionError(f"Widget did not reach expected state: {state}")
 
         with (root / "quickshell.log").open("w+") as log:
+            state_home = root / "state"
+            state_file = state_home / "agent-usage" / "snapshot.json"
             process = subprocess.Popen(["quickshell", "-p", folder, "--no-color"], stdout=log, stderr=log,
-                                       env={**os.environ, "TZ": "Europe/Prague"})
+                                       env={**os.environ, "TZ": "Europe/Prague", "XDG_STATE_HOME": str(state_home)})
             try:
                 initial = wait_for(lambda state: not state["busy"])
                 assert initial["starts"] == 0 and initial["rows"] == []
@@ -216,6 +236,49 @@ def main():
                 assert json.loads(ipc("status"))["starts"] == state["starts"]
                 ipc("action", "close")
                 print("PASS: reopening after one minute refreshes, with no periodic fetching while open")
+
+                def wait_for_saved(expected_updated_at):
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if state_file.exists():
+                            try:
+                                saved = json.loads(state_file.read_text())
+                                if saved.get("generated_at") == expected_updated_at:
+                                    return saved
+                            except json.JSONDecodeError:
+                                pass
+                        time.sleep(0.02)
+                    raise AssertionError(f"Snapshot file did not record {expected_updated_at}")
+
+                saved = wait_for_saved(state["updatedAt"])
+                assert len(saved["rows"]) == 1 and saved["rows"][0]["used_percent"] == 12.5
+                print("PASS: snapshot is persisted to XDG_STATE_HOME/agent-usage/snapshot.json")
+
+                previous_generation = state["generation"]
+                previous_starts = state["starts"]
+                ipc("recreate")
+                recreated = wait_for(lambda s: s["generation"] == previous_generation + 1)
+                assert recreated["starts"] == previous_starts and not recreated["busy"] and not recreated["error"]
+                assert recreated["updatedAt"] == state["updatedAt"]
+                assert recreated["rows"] == state["rows"]
+                print("PASS: recreated widget loads the persisted snapshot before opening")
+
+                ipc("snapshotAge", "60000")
+                ipc("action", "open")
+                in_flight = wait_for(lambda s: s["opened"] and s["busy"])
+                assert in_flight["rows"] == state["rows"]
+                refreshed = wait_for(lambda s: not s["busy"] and s["starts"] == previous_starts + 1)
+                assert refreshed["rows"][0]["used_percent"] == 12.5 and not refreshed["error"]
+                wait_for_saved(refreshed["updatedAt"])
+                ipc("action", "close")
+                print("PASS: recreated widget keeps prefilled rows visible while refreshing a stale snapshot")
+
+                state_file.write_text("not valid json")
+                previous_generation = refreshed["generation"]
+                ipc("recreate")
+                corrupt = wait_for(lambda s: s["generation"] == previous_generation + 1)
+                assert corrupt["rows"] == [] and corrupt["updatedAt"] == "" and corrupt["error"] == ""
+                print("PASS: invalid persisted state falls back cleanly to an empty snapshot")
             except BaseException:
                 log.seek(0)
                 print(log.read(), file=sys.stderr)

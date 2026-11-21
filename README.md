@@ -56,11 +56,13 @@ display the information and do not redeem resets.
 The **AU** bar button opens all quotas together. Opening the popup fetches fresh
 data unless the latest snapshot is less than one minute old. Clicking **Refresh**
 or pressing **R** or **Enter** always refreshes; **Esc** closes the popup.
-There is no periodic fetching. The latest snapshot stays in memory
-between openings, reset countdowns update while visible, and dates use the
-desktop's local timezone. An in-progress fetch can finish after closing.
-Only one fetch runs per widget instance, with a 65-second overall timeout
-(and a five-second kill grace period).
+There is no periodic fetching. The latest snapshot stays in memory between
+openings and is saved to `~/.local/state/agent-usage/snapshot.json` (or
+`$XDG_STATE_HOME/agent-usage/snapshot.json`), so the popup opens prefilled across
+shell restarts and widget reloads. Reset countdowns update while visible, and
+dates use the desktop's local timezone. An in-progress fetch can finish after
+closing. Only one fetch runs per widget instance, with a 65-second overall
+timeout (and a five-second kill grace period).
 
 Usage colors estimate when the quota will run out, using average consumption
 since the current window began. **Red** means projected exhaustion by the

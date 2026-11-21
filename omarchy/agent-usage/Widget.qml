@@ -32,6 +32,13 @@ Panel {
         return Qt.formatDateTime(new Date(value), includeZone ? "dd.MM.yy HH:mm t" : "dd.MM.yy HH:mm");
     }
 
+    function applySnapshot(text) {
+        var snapshot = Model.parseSnapshot(text);
+        rows = snapshot.rows;
+        updatedAt = snapshot.generated_at;
+        nowMs = Date.now();
+    }
+
     function refresh() {
         if (busy) return;
         refreshError = "";
@@ -39,11 +46,29 @@ Panel {
         usageProcess.running = true;
     }
 
+    Component.onCompleted: {
+        var saved = snapshotFile.text();
+        if (!saved) return;
+        try {
+            applySnapshot(saved);
+        } catch (e) {
+        }
+    }
+
     onOpenedChanged: if (opened) {
         nowMs = Date.now();
         var snapshotAge = nowMs - Date.parse(updatedAt);
         if (!updatedAt || snapshotAge < 0 || snapshotAge >= 60000) refresh();
         Qt.callLater(function() { keyCatcher.forceActiveFocus(); });
+    }
+
+    FileView {
+        id: snapshotFile
+        path: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+            + "/agent-usage/snapshot.json"
+        blockLoading: true
+        atomicWrites: true
+        printErrors: false
     }
 
     Process {
@@ -66,10 +91,8 @@ Panel {
                 return;
             }
             try {
-                var snapshot = Model.parseSnapshot(output.text);
-                root.rows = snapshot.rows;
-                root.updatedAt = snapshot.generated_at;
-                root.nowMs = Date.now();
+                root.applySnapshot(output.text);
+                snapshotFile.setText(output.text);
             } catch (e) {
                 root.refreshError = e.message;
             }
