@@ -110,6 +110,77 @@ class UsageTests(unittest.TestCase):
         self.assertTrue(all(r["error"] is None for r in rows))
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
 
+    def cursor_usage(self):
+        reset = 1792454400
+        return {
+            "planUsage": {"autoPercentUsed": 12.34, "apiPercentUsed": 56.78},
+            "billingCycleStart": (reset - 30 * 86400) * 1000,
+            "billingCycleEnd": reset * 1000,
+        }
+
+    def test_cursor_file_token_skips_secret_store(self):
+        auth = json.dumps({"accessToken": "PRIVATE"})
+        seen = {}
+
+        def request(url, headers, method="GET", body=None):
+            seen["headers"] = headers
+            seen["method"] = method
+            seen["body"] = body
+            return self.cursor_usage()
+
+        with patch.object(Path, "read_text", return_value=auth), \
+                patch.object(subprocess, "run") as run, \
+                patch.object(self.usage, "http_json", side_effect=request):
+            rows = self.usage.fetch_wrapper("Cursor", self.usage.cursor_rows)
+        run.assert_not_called()
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(seen["body"], {})
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer PRIVATE")
+        self.assertEqual([row["used_percent"] for row in rows], [12.34, 56.78])
+        self.assertTrue(all(row["error"] is None for row in rows))
+        self.assertNotIn("PRIVATE", json.dumps(rows))
+
+    def test_cursor_secret_store_token_and_keyring_fallback(self):
+        secret = json.dumps({"accessToken": "PRIVATE", "refreshToken": "REFRESH"})
+        auth = json.dumps({"storedIn": "os-secret-store"})
+        keyring = "item-type=0\nvalue=cursor-credentials\nsecret=" + secret + "\n"
+        seen = {}
+
+        def request(url, headers, method="GET", body=None):
+            seen["authorization"] = headers["Authorization"]
+            return self.cursor_usage()
+
+        def read_text(path, *args, **kwargs):
+            return auth if path.name == "auth.json" else keyring
+
+        with patch.object(Path, "read_text", read_text), \
+                patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="secret = " + secret + "\n")) as run, \
+                patch.object(self.usage, "http_json", side_effect=request):
+            rows = self.usage.fetch_wrapper("Cursor", self.usage.cursor_rows)
+        self.assertEqual(run.call_args.args[0], ["secret-tool", "search", "--all", "service", "cursor-credentials"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        self.assertEqual(seen["authorization"], "Bearer PRIVATE")
+        self.assertTrue(all(row["error"] is None for row in rows))
+        dumped = json.dumps(rows)
+        self.assertNotIn("PRIVATE", dumped)
+        self.assertNotIn("REFRESH", dumped)
+
+        with patch.object(Path, "read_text", read_text), \
+                patch.object(subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["secret-tool"])), \
+                patch.object(Path, "glob", return_value=[Path("login.keyring")]), \
+                patch.object(self.usage, "http_json", side_effect=request):
+            rows = self.usage.fetch_wrapper("Cursor", self.usage.cursor_rows)
+        self.assertEqual(seen["authorization"], "Bearer PRIVATE")
+        self.assertTrue(all(row["error"] is None for row in rows))
+
+        with patch.object(Path, "read_text", return_value=auth), \
+                patch.object(subprocess, "run", side_effect=OSError("no secret service")), \
+                patch.object(Path, "glob", return_value=[]):
+            rows = self.usage.fetch_wrapper("Cursor", self.usage.cursor_rows)
+        self.assertEqual(rows[0]["error"], "cursor login not found")
+        self.assertIsNone(rows[0]["used_percent"])
+
     def test_codex_manual_reset_balance_preserves_zero_and_unknown(self):
         auth = json.dumps({"tokens": {"access_token": "PRIVATE", "account_id": "PRIVATE"}})
         cases = [

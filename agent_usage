@@ -249,12 +249,60 @@ def print_table(rows):
             print(f"  {balance:<{balance_w}}  {countdown:<{left_w}}  {expiry}".rstrip())
 
 
+def cursor_secret_token(secret):
+    try:
+        data = json.loads(secret)
+    except json.JSONDecodeError:
+        return None
+    token = data.get("accessToken") if isinstance(data, dict) else None
+    return token if isinstance(token, str) and token else None
+
+
+def cursor_token():
+    # Older Cursor installs keep the token in auth.json. Current ones leave
+    # {"storedIn": "os-secret-store"} and put the token in the secret store.
+    try:
+        auth = json.loads((HOME / ".config/cursor/auth.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        auth = None
+    if isinstance(auth, dict):
+        token = auth.get("accessToken")
+        if isinstance(token, str) and token:
+            return token
+    try:
+        out = subprocess.run(
+            ["secret-tool", "search", "--all", "service", "cursor-credentials"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=REQUEST_TIMEOUT,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        out = ""
+    for line in out.splitlines():
+        if line.startswith("secret = "):
+            token = cursor_secret_token(line.split("=", 1)[1].strip())
+            if token:
+                return token
+    for path in (HOME / ".local/share/keyrings").glob("*.keyring"):
+        text = path.read_text(errors="replace")
+        for block in text.split("item-type="):
+            if "value=cursor-credentials" not in block:
+                continue
+            for line in block.splitlines():
+                if line.startswith("secret="):
+                    token = cursor_secret_token(line.split("=", 1)[1].strip())
+                    if token:
+                        return token
+    raise RuntimeError("cursor login not found")
+
+
 def cursor_rows():
-    auth = json.loads((HOME / ".config/cursor/auth.json").read_text())
+    token = cursor_token()
     data = http_json(
         "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
         {
-            "Authorization": f"Bearer {auth['accessToken']}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Connect-Protocol-Version": "1",
         },
