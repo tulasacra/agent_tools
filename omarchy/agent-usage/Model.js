@@ -97,14 +97,18 @@ function duration(seconds) {
     return minutes + "m";
 }
 
+function pad2(value) {
+    return (value < 10 ? " " : "") + value;
+}
+
 function countdownDuration(seconds) {
     var minutes = Math.max(1, Math.ceil(seconds / 60));
     var days = Math.floor(minutes / 1440);
     var hours = Math.floor(minutes / 60) % 24;
     var mins = minutes % 60;
-    if (days > 0) return days + "d " + hours + "h " + mins + "m";
-    if (hours > 0) return hours + "h " + mins + "m";
-    return mins + "m";
+    if (days > 0) return pad2(days) + "d " + pad2(hours) + "h " + pad2(mins) + "m";
+    if (hours > 0) return pad2(hours) + "h " + pad2(mins) + "m";
+    return pad2(mins) + "m";
 }
 
 function countdown(resetAt, nowMs) {

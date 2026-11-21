@@ -116,7 +116,7 @@ test('expiration details normalize offsets, sort by instant, and preserve duplic
 test('complete expiry details show the soonest date inline and all dates in the tooltip', () => {
   const rows = withExpirations(2, [lateExpiry, earlyExpiry]);
   assert.deepEqual({...model.manualResetSummary(rows, 0, expiryNow, formatExpiry)}, {
-    label: 'Manual resets available: 2', remaining: '8d 21h 14m', date: earlyExpiry,
+    label: 'Manual resets available: 2', remaining: ' 8d 21h 14m', date: earlyExpiry,
   });
   assert.equal(model.manualResetTooltip(rows[0], expiryNow, formatExpiry),
     `Reset expirations (local time)\n${earlyExpiry} (local zone)\n${lateExpiry} (local zone)`);
@@ -201,23 +201,24 @@ test('distinguishes short and long windows and counts down to now', () => {
   assert.equal(model.duration(30 * 86400), '30d');
   assert.equal(model.duration(3660), '1h 1m');
   const now = Date.parse('2026-10-13T00:00:00Z');
-  assert.equal(model.countdown('2026-10-13T05:00:00Z', now), '5h 0m');
+  assert.equal(model.countdown('2026-10-13T05:00:00Z', now), ' 5h  0m');
   assert.equal(model.countdown('2026-10-13T02:00:00+02:00', now), 'now');
   assert.equal(model.countdown('2026-10-12T00:00:00Z', now), 'now');
-  assert.equal(model.countdown('2026-10-13T00:00:01Z', now), '1m');
+  assert.equal(model.countdown('2026-10-13T00:00:01Z', now), ' 1m');
 });
 
 test('countdown formats as d h m, h m, or just m when d and h are 0', () => {
-  assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600 + 43 * 60), '8d 7h 43m');
-  assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600), '8d 7h 0m');
-  assert.equal(model.countdownDuration(2 * 86400 + 15 * 60), '2d 0h 15m');
-  assert.equal(model.countdownDuration(1 * 86400), '1d 0h 0m');
+  assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600 + 43 * 60), ' 8d  7h 43m');
+  assert.equal(model.countdownDuration(8 * 86400 + 7 * 3600), ' 8d  7h  0m');
+  assert.equal(model.countdownDuration(2 * 86400 + 15 * 60), ' 2d  0h 15m');
+  assert.equal(model.countdownDuration(1 * 86400), ' 1d  0h  0m');
   assert.equal(model.countdownDuration(21 * 3600 + 43 * 60), '21h 43m');
-  assert.equal(model.countdownDuration(4 * 3600 + 32 * 60), '4h 32m');
-  assert.equal(model.countdownDuration(4 * 3600), '4h 0m');
+  assert.equal(model.countdownDuration(4 * 3600 + 32 * 60), ' 4h 32m');
+  assert.equal(model.countdownDuration(4 * 3600), ' 4h  0m');
   assert.equal(model.countdownDuration(45 * 60), '45m');
-  assert.equal(model.countdownDuration(60), '1m');
-  assert.equal(model.countdownDuration(1), '1m');
+  assert.equal(model.countdownDuration(60), ' 1m');
+  assert.equal(model.countdownDuration(1), ' 1m');
+  assert.equal(model.countdownDuration(100 * 86400), '100d  0h  0m');
 });
 
 function paceAt(elapsedFraction, usedPercent, nowOffset = 0) {
@@ -272,7 +273,7 @@ test('unknown windows disable projections but still flag an exhausted quota unti
   const pace = model.usagePace(row, data.generated_at, now);
   assert.equal(pace.level, 'normal');
   assert.match(pace.hint, /window length is unknown/);
-  assert.equal(model.countdown(row.reset_at, now), '5h 0m');
+  assert.equal(model.countdown(row.reset_at, now), ' 5h  0m');
   row.used_percent = 0;
   assert.match(model.usagePace(row, data.generated_at, now).hint, /No quota used/);
   row.used_percent = 100;

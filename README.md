@@ -26,7 +26,7 @@ HTTP requests and subprocess calls have 30-second timeouts.
 
 Codex's **Manual resets available** balance appears once beneath its quota rows
 in the terminal and popup. The **Resets in** column shows time until the next
-expiration (`8.9 days` in the terminal, `8d 21h 14m` in the popup), and **Reset date**
+expiration (`8.9 days` in the terminal, ` 8d 21h 14m` in the popup), and **Reset date**
 shows its local date and time. All terminal reset dates include hours and minutes.
 Hover over the popup summary to see all returned expiration dates, earliest
 first, with timezone abbreviations. A zero balance omits the expiration.
