@@ -205,13 +205,43 @@ Panel {
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
                             implicitWidth: Style.space(120)
-                            text: root.busy ? "Refreshing…" : "Refresh"
+                            implicitHeight: refreshLabel.implicitHeight + verticalPadding * 2
+                                + _reservedBorderTop + _reservedBorderBottom
                             enabled: !root.busy
+                            opacity: enabled ? 1 : 0.4
                             bordered: true
                             foreground: root.foreground
                             fontFamily: root.fontFamily
                             fontSize: Style.font.bodySmall
                             onClicked: root.refresh()
+
+                            Item {
+                                id: refreshLabel
+                                anchors.centerIn: parent
+                                implicitWidth: (root.busy ? 0 : refreshMnemonic.implicitWidth) + refreshRest.implicitWidth
+                                implicitHeight: Math.max(refreshMnemonic.implicitHeight, refreshRest.implicitHeight)
+
+                                Text {
+                                    id: refreshMnemonic
+                                    visible: !root.busy
+                                    textFormat: Text.PlainText
+                                    text: "R"
+                                    font.underline: true
+                                    color: refreshButton.foreground
+                                    font.family: refreshButton.fontFamily
+                                    font.pixelSize: refreshButton.fontSize
+                                    anchors.baseline: refreshRest.baseline
+                                }
+                                Text {
+                                    id: refreshRest
+                                    x: root.busy ? 0 : refreshMnemonic.implicitWidth
+                                    textFormat: Text.PlainText
+                                    text: root.busy ? "Refreshing…" : "efresh"
+                                    color: refreshButton.foreground
+                                    font.family: refreshButton.fontFamily
+                                    font.pixelSize: refreshButton.fontSize
+                                }
+                            }
                         }
                     }
 
@@ -352,13 +382,6 @@ Panel {
                         }
                     }
 
-                    Cell {
-                        width: parent.width
-                        text: "Refresh: R or Enter   ·   Close: Esc   ·   Times are local"
-                        color: root.muted
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.Wrap
-                    }
                 }
             }
         }
