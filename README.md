@@ -53,6 +53,8 @@ display the information and do not redeem resets.
 
 ## Omarchy popup
 
+![Agent usage popup](screenshot.png)
+
 The **AU** bar button opens all quotas together. Opening the popup fetches fresh
 data unless the latest snapshot is less than one minute old. Clicking **Refresh**
 or pressing **R** or **Enter** always refreshes; **Esc** closes the popup.
