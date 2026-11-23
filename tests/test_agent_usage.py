@@ -99,9 +99,10 @@ class UsageTests(unittest.TestCase):
         self.assertIsNotNone(datetime.fromisoformat(data["generated_at"]).tzinfo)
         rows = data["rows"]
         self.assertEqual([r["provider"] for r in rows], ["cursor", "cursor", "copilot", "codex", "codex", "antigravity", "antigravity"])
-        self.assertEqual([r["used_percent"] for r in rows], [12.34, 56.78, 20, 5, 42, 25, 50])
+        self.assertEqual([r["used_percent"] for r in rows], [12.34, 56.78, 20, 42, 5, 25, 50])
         self.assertEqual(rows[2]["window_seconds"], 31 * 86400)
-        self.assertEqual([r["window_seconds"] for r in rows[3:5]], [18000, 604800])
+        self.assertEqual([r["window_seconds"] for r in rows[3:5]], [604800, 18000])
+        self.assertEqual([r["label"] for r in rows[3:5]], ["Codex (Gpt 7d)", "Codex (Gpt 5h)"])
         self.assertEqual([r["manual_resets_available"] for r in rows], [None, None, None, 3, 3, None, None])
         dates = ["2026-10-22T21:13:00+00:00", "2026-10-29T19:44:00+00:00", "2026-11-07T00:05:00+00:00"]
         self.assertEqual([r["manual_reset_expirations"] for r in rows], [None, None, None, dates, dates, None, None])
@@ -211,11 +212,11 @@ class UsageTests(unittest.TestCase):
             self.assertIsNone(rows[0]["error"])
             json.dumps(rows, allow_nan=False)
 
-    def test_terminal_manual_resets_appear_once_after_codex_windows(self):
+    def test_terminal_manual_resets_appear_once_after_weekly_codex_window(self):
         for count in (3, 0, None):
             with self.subTest(count=count):
                 rows = self.usage.fetch_wrapper("Cursor", lambda: self.usage.row("Cursor", 10, "2026-10-20", 86400))
-                for label, window in (("Codex 5h", 18000), ("Codex Week", 604800)):
+                for label, window in (("Codex Week", 604800), ("Codex 5h", 18000)):
                     rows += self.usage.fetch_wrapper("Codex", lambda: self.usage.row(
                         label, 25, "2026-10-20", window, manual_resets_available=count))
                 rows += self.usage.fetch_wrapper("Copilot", lambda: self.usage.fail("Copilot", "http 401"))
@@ -231,7 +232,7 @@ class UsageTests(unittest.TestCase):
                 self.assertEqual(output.count("Manual resets available:"), 1)
                 index = lines.index(summary)
                 self.assertTrue(lines[index - 1].startswith("Codex Week"))
-                self.assertTrue(lines[index + 1].startswith("Copilot"))
+                self.assertTrue(lines[index + 1].startswith("Codex 5h"))
 
         for failed in (False, True):
             with self.subTest(failed=failed):
@@ -454,9 +455,9 @@ class UsageTests(unittest.TestCase):
             rows = self.usage.fetch_wrapper("Antigravity", self.usage.antigravity_rows)
         self.assertEqual([r["window_seconds"] for r in rows], [604800, 18000, None, None, 604800])
         self.assertEqual([r["label"] for r in rows], [
-            "Antigravity (Gemini Week)", "Antigravity (Gemini 5h)",
+            "Antigravity (Gemini 7d)", "Antigravity (Gemini 5h)",
             "Antigravity (Gemini unknown)", "Antigravity (Gemini Monthly)",
-            "Antigravity (Argon Week)",
+            "Antigravity (Argon 7d)",
         ])
         self.assertTrue(all(r["used_percent"] == 25 and r["error"] is None for r in rows))
 
@@ -498,7 +499,7 @@ class UsageTests(unittest.TestCase):
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=payload)):
             rows = self.usage.fetch_wrapper("Antigravity", self.usage.antigravity_rows)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0]["label"], "Antigravity (Gemini Week)")
+        self.assertEqual(rows[0]["label"], "Antigravity (Gemini 7d)")
         self.assertAlmostEqual(rows[0]["used_percent"], 0.5)
         self.assertEqual(rows[0]["reset_at"], "2026-10-20T00:00:00+00:00")
         self.assertEqual(rows[0]["window_seconds"], 7 * 86400)

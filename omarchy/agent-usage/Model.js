@@ -51,9 +51,16 @@ function parseSnapshot(text) {
 function manualResetSummary(rows, index, nowMs, formatDate) {
     var row = rows[index];
     if (!row || row.provider !== "codex") return null;
-    for (var next = index + 1; next < rows.length; next++) {
-        if (rows[next].provider === "codex") return null;
+    var resetIndex = -1;
+    for (var candidate = rows.length - 1; candidate >= 0; candidate--) {
+        if (rows[candidate].provider !== "codex") continue;
+        if (rows[candidate].window_seconds === 7 * 86400) {
+            resetIndex = candidate;
+            break;
+        }
+        if (resetIndex === -1) resetIndex = candidate;
     }
+    if (index !== resetIndex) return null;
     var count = row.manual_resets_available;
     var summary = "Manual resets available: " + (count == null ? "—" : count);
     if (count === 0) return {label: summary, remaining: "", date: ""};

@@ -162,8 +162,12 @@ def fail(label, message):
 
 def print_table(rows):
     entries = []
-    last_codex = max((index for index, record in enumerate(rows) if record["provider"] == "codex"), default=-1)
-    reset_cells = manual_reset_cells(rows[last_codex]) if last_codex >= 0 else None
+    _, reset_index = max(
+        ((record["window_seconds"] == 7 * 86400, index)
+         for index, record in enumerate(rows) if record["provider"] == "codex"),
+        default=(False, -1),
+    )
+    reset_cells = manual_reset_cells(rows[reset_index]) if reset_index >= 0 else None
     for record in rows:
         if record["error"] is not None:
             entries.append((record["label"], record["error"]))
@@ -241,7 +245,7 @@ def print_table(rows):
                 f"{left_cell(number, period, unit)}  "
                 f"{date:<{date_w}}".rstrip()
             )
-        if index == last_codex:
+        if index == reset_index:
             balance, countdown, expiry = reset_cells
             balance_w = agent_w + used_w
             if countdown.endswith(" days"):
@@ -407,11 +411,14 @@ def codex_rows():
         window_seconds = window.get("limit_window_seconds")
         if percent is None or reset is None or not window_seconds:
             continue
-        row("Codex (Gpt)", percent, reset, window_seconds,
+        period = {7 * 86400: "7d", 5 * 3600: "5h"}.get(float(window_seconds))
+        label = f"Codex (Gpt {period})" if period else "Codex (Gpt)"
+        row(label, percent, reset, window_seconds,
             manual_resets_available=available, manual_reset_expirations=expirations)
         shown = True
     if not shown:
         raise RuntimeError("usage response has no rate limit windows")
+    tls.entries.sort(key=lambda entry: entry["window_seconds"], reverse=True)
 
 
 def antigravity_rows():
@@ -440,10 +447,10 @@ def antigravity_rows():
                 window_kind = bucket.get("window", "")
                 name = bucket.get("name", "")
                 period, window = {
-                    "weekly": ("Week", 7 * 86400),
+                    "weekly": ("7d", 7 * 86400),
                     "5h": ("5h", 5 * 3600),
                 }.get(window_kind, (
-                    "Week" if "Weekly" in name else "5h" if "Five Hour" in name else window_kind or "unknown",
+                    "7d" if "Weekly" in name else "5h" if "Five Hour" in name else window_kind or "unknown",
                     7 * 86400 if "Weekly" in name else 5 * 3600 if "Five Hour" in name else None,
                 ))
                 remaining_fraction = bucket.get("remaining_fraction")
@@ -475,7 +482,7 @@ def antigravity_rows():
             # /usage names both windows explicitly. New or unspecified periods
             # must not silently turn into a five-hour window.
             period, window = {
-                "Weekly Limit": ("Week", 7 * 86400),
+                "Weekly Limit": ("7d", 7 * 86400),
                 "Five Hour Limit": ("5h", 5 * 3600),
             }.get(kind, (kind.removesuffix("Limit").strip() or "unknown", None))
             reset_at = None if percent <= 0.0 else parts[3].strip()

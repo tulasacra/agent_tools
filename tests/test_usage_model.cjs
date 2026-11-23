@@ -70,16 +70,16 @@ test('manual reset balances preserve zero and normalize missing or invalid value
   }
 });
 
-test('manual reset summary appears once after the final Codex window only', () => {
+test('manual reset summary appears once under the weekly Codex window', () => {
   const data = snapshot();
   data.rows[0].manual_resets_available = 3;
-  data.rows.splice(1, 0, {...data.rows[0], window_seconds: 604800});
+  data.rows.unshift({...data.rows[0], window_seconds: 604800});
   const {rows} = model.parseSnapshot(JSON.stringify(data));
-  assert.equal(resetSummaryText(rows, 0), '');
-  assert.equal(resetSummaryText(rows, 1), 'Manual resets available: 3 —');
+  assert.equal(resetSummaryText(rows, 0), 'Manual resets available: 3 —');
+  assert.equal(resetSummaryText(rows, 1), '');
   assert.equal(resetSummaryText(rows, 2), '');
   rows.pop(); // The final provider also gets its summary.
-  assert.equal(resetSummaryText(rows, 1), 'Manual resets available: 3 —');
+  assert.equal(resetSummaryText(rows, 0), 'Manual resets available: 3 —');
 });
 
 test('unavailable Codex balances stay unknown alongside the provider error', () => {
