@@ -294,6 +294,8 @@ Panel {
                             required property var modelData
                             required property int index
                             readonly property bool failed: modelData.error !== null
+                            readonly property color resetTextColor: modelData.window_seconds === 5 * 3600
+                                ? root.muted : root.foreground
                             readonly property var pace: Model.usagePace(modelData, root.updatedAt, root.nowMs)
                             readonly property var resetSummary: Model.manualResetSummary(root.rows, index, root.nowMs, root.formatResetExpiry)
                             readonly property string resetTooltip: Model.manualResetTooltip(modelData, root.nowMs, root.formatResetExpiry)
@@ -330,16 +332,19 @@ Panel {
                                     width: content.countdownWidth
                                     text: quota.failed || quota.modelData.reset_at === null
                                         ? "—" : Model.countdown(quota.modelData.reset_at, root.nowMs)
+                                    color: quota.resetTextColor
                                 }
                                 Cell {
                                     width: content.dateWidth
                                     text: quota.failed || quota.modelData.reset_at === null
                                         ? "—" : Qt.formatDateTime(new Date(quota.modelData.reset_at), "dd.MM.yy HH:mm")
+                                    color: quota.resetTextColor
                                 }
                                 Cell {
                                     width: content.windowWidth
                                     text: quota.failed || quota.modelData.window_seconds === null
                                         ? "—" : Model.duration(quota.modelData.window_seconds)
+                                    color: quota.resetTextColor
                                 }
                             }
                             Cell {
