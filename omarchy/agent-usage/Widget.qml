@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls as Controls
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -413,5 +414,13 @@ Panel {
                 }
             }
         }
+    }
+
+    // Keep keyboard input on AU after KeyboardPanel releases exclusive focus.
+    // A click on another output clears the grab and dismisses the panel.
+    HyprlandFocusGrab {
+        active: popup.open && popup.focusPrimed
+        windows: [popup]
+        onCleared: root.close()
     }
 }
